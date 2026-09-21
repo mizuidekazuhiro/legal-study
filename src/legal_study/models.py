@@ -13,6 +13,19 @@ class PageMode(StrEnum):
     OCR_REQUIRED = "ocr_required"
 
 
+class TextLayerTrust(StrEnum):
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+
+class TextLayerOrigin(StrEnum):
+    BORN_DIGITAL_LIKELY = "born_digital_likely"
+    EMBEDDED_OCR_OR_CORRUPT_MAPPING_LIKELY = "embedded_ocr_or_corrupt_mapping_likely"
+    SCAN_LIKE = "scan_like"
+    UNKNOWN = "unknown"
+
+
 class BBox(BaseModel):
     x0: float
     y0: float
@@ -92,6 +105,10 @@ class PageInspection(BaseModel):
     native_char_count: int
     native_quality_score: float
     suspicious_char_count: int = 0
+    suspicious_token_count: int = 0
+    suspicious_char_ratio: float = 0.0
+    text_layer_trust: TextLayerTrust = TextLayerTrust.HIGH
+    text_layer_origin: TextLayerOrigin = TextLayerOrigin.UNKNOWN
     suspect_native_regions: list[SuspectRegion] = Field(default_factory=list)
     image_coverage: float
     largest_image_coverage: float
