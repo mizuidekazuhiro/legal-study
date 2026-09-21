@@ -29,12 +29,29 @@ class NativeSpan(BaseModel):
 
 
 class PdfAnnotation(BaseModel):
+    xref: int
+    type_code: int
     type_name: str
     rect: BBox
     colors: dict[str, Any] = Field(default_factory=dict)
     opacity: float | None = None
     content: str | None = None
     vertices: list[tuple[float, float]] = Field(default_factory=list)
+    raw: dict[str, Any] = Field(default_factory=dict)
+
+
+class RawVectorDrawing(BaseModel):
+    drawing_index: int
+    rect: BBox
+    raw: dict[str, Any] = Field(default_factory=dict)
+
+
+class RawImageRegion(BaseModel):
+    image_index: int
+    bbox: BBox
+    xref: int | None = None
+    digest: str | None = None
+    raw: dict[str, Any] = Field(default_factory=dict)
 
 
 class VectorMark(BaseModel):
@@ -71,7 +88,10 @@ class PageInspection(BaseModel):
     ocr_recommended: bool
     vision_review_recommended: bool
     spans: list[NativeSpan] = Field(default_factory=list)
+    raw_native: dict[str, Any] = Field(default_factory=dict)
     annotations: list[PdfAnnotation] = Field(default_factory=list)
+    raw_vector_drawings: list[RawVectorDrawing] = Field(default_factory=list)
+    raw_image_regions: list[RawImageRegion] = Field(default_factory=list)
     vector_marks: list[VectorMark] = Field(default_factory=list)
     rendered_image: Path | None = None
     reasons: list[str] = Field(default_factory=list)

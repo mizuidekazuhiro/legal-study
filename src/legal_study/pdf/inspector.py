@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Iterable
 from pathlib import Path
+from typing import Any
 
 import fitz
 
@@ -14,6 +15,8 @@ from legal_study.models import (
     PageInspection,
     PageMode,
     PdfAnnotation,
+    RawImageRegion,
+    RawVectorDrawing,
     SuspectRegion,
 )
 from legal_study.pdf.quality import (
@@ -73,15 +76,19 @@ class PdfInspector:
         self, page: fitz.Page, page_number: int, output_dir: Path | None
     ) -> PageInspection:
         native_text = page.get_text("text", sort=True)
+        raw_native = self._raw_native(page)
         native_count = useful_char_count(native_text)
         quality = native_text_quality(native_text)
-        image_coverage, largest_image_coverage = self._image_coverage(page)
+        image_info = page.get_image_info(hashes=True, xrefs=True)
+        raw_image_regions = self._raw_image_regions(image_info)
+        image_coverage, largest_image_coverage = self._image_coverage(page, image_info)
         spans = self._spans(page)
         suspect_regions = self._suspect_regions(spans)
         suspicious_count = suspicious_char_count(native_text)
         annotations = self._annotations(page)
-        marks = extract_vector_marks(page)
         drawings = page.get_drawings()
+        raw_vector_drawings = self._raw_vector_drawings(drawings)
+        marks = extract_vector_marks(page)
 
         reasons: list[str] = []
         if native_count < self.min_native_chars:
@@ -137,7 +144,10 @@ class PdfInspector:
             ocr_recommended=ocr_required,
             vision_review_recommended=vision_review,
             spans=spans,
+            raw_native=raw_native,
             annotations=annotations,
+            raw_vector_drawings=raw_vector_drawings,
+            raw_image_regions=raw_image_regions,
             vector_marks=marks,
             rendered_image=rendered,
             reasons=reasons,
@@ -152,18 +162,90 @@ class PdfInspector:
         return digest.hexdigest()
 
     @staticmethod
-    def _image_coverage(page: fitz.Page) -> tuple[float, float]:
+    def _image_coverage(
+        page: fitz.Page, image_info: list[dict[str, Any]]
+    ) -> tuple[float, float]:
         page_area = max(page.rect.get_area(), 1.0)
         areas: list[float] = []
         seen: set[tuple[float, float, float, float]] = set()
-        for image in page.get_images(full=True):
-            for rect in page.get_image_rects(image[0]):
-                key = tuple(round(v, 2) for v in rect)
-                if key in seen:
-                    continue
-                seen.add(key)
-                areas.append(max(0.0, rect.get_area() / page_area))
+        for image in image_info:
+            rect = fitz.Rect(image["bbox"])
+            key = tuple(round(v, 2) for v in rect)
+            if key in seen:
+                continue
+            seen.add(key)
+            areas.append(max(0.0, rect.get_area() / page_area))
         return min(1.0, sum(areas)), min(1.0, max(areas, default=0.0))
+
+    @classmethod
+    def _raw_native(cls, page: fitz.Page) -> dict[str, Any]:
+        data = page.get_text("rawdict", sort=False)
+        # Image bytes are deliberately represented by get_image_info metadata
+        # instead. Text blocks retain the PDF extraction order and per-character
+        # coordinates, which are needed to audit later normalized text.
+        text_only = {
+            **{key: value for key, value in data.items() if key != "blocks"},
+            "blocks": [block for block in data.get("blocks", []) if block.get("type") == 0],
+        }
+        return cls._json_safe(text_only)
+
+    @classmethod
+    def _raw_vector_drawings(
+        cls, drawings: list[dict[str, Any]]
+    ) -> list[RawVectorDrawing]:
+        output: list[RawVectorDrawing] = []
+        for index, drawing in enumerate(drawings):
+            rect = fitz.Rect(drawing["rect"])
+            output.append(
+                RawVectorDrawing(
+                    drawing_index=index,
+                    rect=BBox(x0=rect.x0, y0=rect.y0, x1=rect.x1, y1=rect.y1),
+                    raw=cls._json_safe(drawing),
+                )
+            )
+        return output
+
+    @classmethod
+    def _raw_image_regions(
+        cls, image_info: list[dict[str, Any]]
+    ) -> list[RawImageRegion]:
+        output: list[RawImageRegion] = []
+        for index, image in enumerate(image_info):
+            rect = fitz.Rect(image["bbox"])
+            digest = image.get("digest")
+            output.append(
+                RawImageRegion(
+                    image_index=index,
+                    bbox=BBox(x0=rect.x0, y0=rect.y0, x1=rect.x1, y1=rect.y1),
+                    xref=int(image["xref"]) if image.get("xref") else None,
+                    digest=digest.hex() if isinstance(digest, bytes) else None,
+                    raw=cls._json_safe(image),
+                )
+            )
+        return output
+
+    @classmethod
+    def _json_safe(cls, value: Any) -> Any:
+        if value is None or isinstance(value, str | int | float | bool):
+            return value
+        if isinstance(value, bytes):
+            return {"type": "bytes", "hex": value.hex()}
+        if isinstance(value, dict):
+            return {str(key): cls._json_safe(item) for key, item in value.items()}
+        if isinstance(value, list | tuple):
+            return [cls._json_safe(item) for item in value]
+        if isinstance(value, fitz.Rect | fitz.IRect):
+            return {"type": "rect", "values": [float(item) for item in value]}
+        if isinstance(value, fitz.Point):
+            return {"type": "point", "values": [float(value.x), float(value.y)]}
+        if isinstance(value, fitz.Quad):
+            return {
+                "type": "quad",
+                "values": [[float(point.x), float(point.y)] for point in value],
+            }
+        if isinstance(value, fitz.Matrix):
+            return {"type": "matrix", "values": [float(item) for item in value]}
+        raise TypeError(f"Unsupported PyMuPDF evidence value: {type(value).__name__}")
 
     @staticmethod
     def _spans(page: fitz.Page) -> list[NativeSpan]:
@@ -215,14 +297,32 @@ class PdfInspector:
                     for point in (fitz.Point(value) for value in annotation_vertices)
                 ]
             rect = annot.rect
+            type_code, type_name = annot.type
+            raw = {
+                "xref": annot.xref,
+                "type": {"code": type_code, "name": type_name},
+                "rect": PdfInspector._json_safe(rect),
+                "colors": PdfInspector._json_safe(annot.colors or {}),
+                "opacity": annot.opacity,
+                "info": PdfInspector._json_safe(annot.info or {}),
+                "vertices": PdfInspector._json_safe(annotation_vertices or []),
+                "flags": annot.flags,
+                "border": PdfInspector._json_safe(annot.border or {}),
+                "blend_mode": annot.blendmode,
+                "line_ends": PdfInspector._json_safe(annot.line_ends),
+                "popup_xref": annot.popup_xref,
+            }
             out.append(
                 PdfAnnotation(
-                    type_name=str(annot.type[1]),
+                    xref=int(annot.xref),
+                    type_code=int(type_code),
+                    type_name=str(type_name),
                     rect=BBox(x0=rect.x0, y0=rect.y0, x1=rect.x1, y1=rect.y1),
                     colors=dict(annot.colors or {}),
                     opacity=annot.opacity,
                     content=(annot.info or {}).get("content"),
                     vertices=vertices,
+                    raw=raw,
                 )
             )
             annot = annot.next
