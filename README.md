@@ -104,6 +104,15 @@ legal-study ingest ".\materials\論文マスター_刑法.pdf" --subject crimina
 
 run内のJSONが参照するrender/cropのpathはrun-relativeなPOSIX形式です。runディレクトリを移動しても、同じディレクトリ構造のままartifactを解決できます。
 
+
+P1-Bまで完了済みのrunがある場合、OCRを再実行せずP1-C成果物だけを生成できます。
+
+```powershell
+legal-study finalize "C:\Users\<user>\.legal-study\runs\<existing-run>"
+```
+
+`finalize`は既存の`inspection.json`、`ocr.json`、`review_manifest.json`とSQLite run stateを検証した上で、`reconciliation.json`、`canonical_source.json`、`<subject>_<question>_problem.md`、`problem_validation.json`を生成します。PaddleOCRは呼び出さないため、既存の20分程度のOCR stepを再実行しません。
+
 ## PaddleOCRを追加する
 
 PaddleOCR本体とCPU版PaddlePaddle runtimeをインストールし、オンライン環境で一度だけ明示的にモデルを取得します。モデルは `~/.legal-study/models/paddleocr/` に保存され、manifestのhashと実体が一致した場合だけ通常ingestで利用されます。`ingest --ocr paddle`が暗黙にdownloadを始めることはありません。
