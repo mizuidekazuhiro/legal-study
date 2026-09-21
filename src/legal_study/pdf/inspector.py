@@ -23,6 +23,7 @@ from legal_study.models import (
     TextLayerTrust,
 )
 from legal_study.pdf.quality import (
+    japanese_char_ratio,
     native_text_quality,
     suspicious_char_count,
     suspicious_token_count,
@@ -104,9 +105,14 @@ class PdfInspector:
         image_coverage, largest_image_coverage = self._image_coverage(page, image_info)
         spans = self._spans(page)
         native_chars = self._native_chars(page)
-        suspect_regions = self._suspect_regions(spans)
+        japanese_context = japanese_char_ratio(native_text) >= 0.15
+        suspect_regions = self._suspect_regions(
+            spans, allow_latin_noise=japanese_context
+        )
         suspicious_count = suspicious_char_count(native_text)
-        suspicious_tokens = suspicious_token_count(native_text)
+        suspicious_tokens = (
+            suspicious_token_count(native_text) if japanese_context else 0
+        )
         suspicious_ratio = suspicious_count / max(native_count, 1)
         annotations = self._annotations(page)
         drawings = page.get_drawings()
@@ -399,11 +405,13 @@ class PdfInspector:
         return output
 
     @staticmethod
-    def _suspect_regions(spans: list[NativeSpan]) -> list[SuspectRegion]:
+    def _suspect_regions(
+        spans: list[NativeSpan], *, allow_latin_noise: bool = True
+    ) -> list[SuspectRegion]:
         regions: list[SuspectRegion] = []
         for span in spans:
             glyph_count = suspicious_char_count(span.text)
-            token_count = suspicious_token_count(span.text)
+            token_count = suspicious_token_count(span.text) if allow_latin_noise else 0
             if not glyph_count and not token_count:
                 continue
             reasons: list[str] = []
