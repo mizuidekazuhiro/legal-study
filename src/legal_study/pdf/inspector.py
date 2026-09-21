@@ -88,7 +88,7 @@ class PdfInspector:
         annotations = self._annotations(page)
         drawings = page.get_drawings()
         raw_vector_drawings = self._raw_vector_drawings(drawings)
-        marks = extract_vector_marks(page)
+        marks = extract_vector_marks(page, drawings=drawings)
 
         reasons: list[str] = []
         if native_count < self.min_native_chars:

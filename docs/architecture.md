@@ -91,7 +91,7 @@ quality, geometry, and later Vision review are preserved separately.
 - `ocr.json`: OCR results only for pages/regions where OCR was requested.
 - `review_manifest.json`: compact list of pages/regions that still require review.
 - `ocr_crops/`: surgical OCR crops for suspicious native spans.
-- `review_crops/`: red-pen clusters for semantic Vision review.
+- `review_crops/`: red vector-evidence clusters for semantic Vision review.
 
 The source SHA-256 is always recorded so a changed PDF cannot silently reuse stale
 extraction results.

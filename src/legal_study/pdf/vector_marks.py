@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from math import sqrt
 
@@ -71,63 +71,93 @@ def _extract_words(page: fitz.Page, rect: fitz.Rect, stroke_width: float) -> str
     return " ".join(x[3] for x in hits).strip() or None
 
 
-def extract_vector_marks(page: fitz.Page) -> list[VectorMark]:
+def _opacity(value: object) -> float:
+    return 1.0 if value is None else float(value)
+
+
+def extract_vector_marks(
+    page: fitz.Page, *, drawings: Sequence[dict[str, object]] | None = None
+) -> list[VectorMark]:
+    """Classify vector candidates without controlling raw evidence retention.
+
+    PdfInspector stores every drawing separately before this function runs. An
+    absent result here therefore means "unclassified", never "discarded".
+    """
     marks: list[VectorMark] = []
-    for drawing in page.get_drawings():
-        color = drawing.get("color")
-        if color is None:
-            continue
-        rgb = tuple(float(v) for v in color)
-        name = nearest_color(rgb)
-        if name is None:
-            continue
-
-        width = float(drawing.get("width") or 0.0)
-        opacity = float(drawing.get("stroke_opacity") or 1.0)
+    source_drawings = drawings if drawings is not None else page.get_drawings()
+    for drawing_index, drawing in enumerate(source_drawings):
         rect = fitz.Rect(drawing["rect"])
+        width_value = drawing.get("width")
+        width = float(width_value) if width_value is not None else None
+        paint_values = (
+            ("stroke", drawing.get("color"), drawing.get("stroke_opacity")),
+            ("fill", drawing.get("fill"), drawing.get("fill_opacity")),
+        )
+        for paint, color, opacity_value in paint_values:
+            if color is None:
+                continue
+            rgb = tuple(float(value) for value in color)
+            if len(rgb) != 3:
+                continue
+            name = nearest_color(rgb)
+            if name is None:
+                continue
 
-        if name in {"yellow", "blue", "orange", "purple"} and width >= 3.0:
-            text = _extract_words(page, rect, width)
-            marks.append(
-                VectorMark(
-                    kind="highlight_stroke",
-                    color_name=name,
-                    color_rgb=rgb,
-                    rect=_bbox(rect),
-                    width=width,
-                    opacity=opacity,
-                    extracted_text=text,
-                    confidence=(
-                        0.95 if text and suspicious_char_count(text) == 0
-                        else 0.75 if text
-                        else 0.70
-                    ),
+            if name == "red":
+                # Red is deliberately not interpreted as a correction, deletion,
+                # person marker, underline, circle, or any other legal meaning.
+                marks.append(
+                    VectorMark(
+                        drawing_index=drawing_index,
+                        paint=paint,
+                        kind="red_vector_evidence",
+                        color_name=name,
+                        color_rgb=rgb,
+                        rect=_bbox(rect),
+                        width=width,
+                        opacity=_opacity(opacity_value),
+                        confidence=0.99,
+                    )
                 )
-            )
-        elif name == "red" and width < 3.0:
-            # Red thin strokes are intentionally NOT interpreted as a correction,
-            # deletion, person marker, underline, circle, etc. They are evidence
-            # for a later crop-based Vision pass.
-            marks.append(
-                VectorMark(
-                    kind="red_pen_stroke",
-                    color_name=name,
-                    color_rgb=rgb,
-                    rect=_bbox(rect),
-                    width=width,
-                    opacity=opacity,
-                    confidence=0.99,
+                continue
+
+            marker_stroke = paint == "stroke" and width is not None and width >= 3.0
+            marker_fill = paint == "fill"
+            if name in {"yellow", "blue", "orange", "purple"} and (
+                marker_stroke or marker_fill
+            ):
+                text = _extract_words(page, rect, width or 0.0)
+                marks.append(
+                    VectorMark(
+                        drawing_index=drawing_index,
+                        paint=paint,
+                        kind="marker_candidate",
+                        color_name=name,
+                        color_rgb=rgb,
+                        rect=_bbox(rect),
+                        width=width,
+                        opacity=_opacity(opacity_value),
+                        extracted_text=text,
+                        confidence=(
+                            0.95
+                            if text and suspicious_char_count(text) == 0
+                            else 0.75
+                            if text
+                            else 0.70
+                        ),
+                    )
                 )
-            )
     return marks
 
 
-def cluster_red_pen_marks(marks: Iterable[VectorMark], gap: float = 12.0) -> list[BBox]:
-    """Cluster thin red vector strokes into crop-sized regions for Vision review."""
+def cluster_red_vector_evidence(
+    marks: Iterable[VectorMark], gap: float = 12.0
+) -> list[BBox]:
+    """Cluster red stroke/fill evidence into crop-sized regions for Vision review."""
     rects = [
         fitz.Rect(m.rect.x0, m.rect.y0, m.rect.x1, m.rect.y1)
         for m in marks
-        if m.kind == "red_pen_stroke"
+        if m.kind == "red_vector_evidence"
     ]
     clusters: list[fitz.Rect] = []
     for rect in rects:

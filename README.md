@@ -94,7 +94,7 @@ legal-study ingest ".\materials\論文マスター_刑法.pdf" --subject crimina
 - `ocr.json`
 - `renders/page-XXXX.png`
 - `ocr_crops/`（壊れたUnicode mappingが疑われる箇所だけを450dpiで切り出し）
-- `review_crops/`（赤ペンstrokeをクラスタ化したVision確認用crop）
+- `review_crops/`（赤色vector evidenceをクラスタ化したVision確認用crop）
 
 ## PaddleOCRを追加する
 

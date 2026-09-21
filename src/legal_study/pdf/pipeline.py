@@ -9,7 +9,7 @@ from legal_study.io_utils import atomic_output_path, atomic_write_json, file_sha
 from legal_study.models import BBox, DocumentInspection
 from legal_study.pdf.inspector import PdfInspector
 from legal_study.pdf.ocr.base import OcrEngine
-from legal_study.pdf.vector_marks import cluster_red_pen_marks
+from legal_study.pdf.vector_marks import cluster_red_vector_evidence
 from legal_study.run_manifest import PreparedRun, update_manifest_page_count
 from legal_study.source_store import SourceSnapshot, verify_snapshot
 from legal_study.state import RunStateMissingError, RunStateStore
@@ -475,7 +475,7 @@ class PdfIngestPipeline:
         manifest: dict[int, list[dict[str, object]]] = {}
         try:
             for inspected_page in inspection.pages:
-                clusters = cluster_red_pen_marks(inspected_page.vector_marks)
+                clusters = cluster_red_vector_evidence(inspected_page.vector_marks)
                 if not clusters:
                     continue
                 page = document[inspected_page.page_number - 1]
@@ -488,7 +488,7 @@ class PdfIngestPipeline:
                         pixmap.save(temporary)
                     page_items.append(
                         {
-                            "kind": "red_pen_cluster",
+                            "kind": "red_vector_cluster",
                             "bbox": [clip.x0, clip.y0, clip.x1, clip.y1],
                             "image": str(path),
                         }
@@ -559,7 +559,7 @@ class PdfIngestPipeline:
                     "reasons": p.reasons,
                     "rendered_image": str(p.rendered_image) if p.rendered_image else None,
                     "vector_mark_count": len(p.vector_marks),
-                    "highlight_text_candidates": [
+                    "marker_text_candidates": [
                         {
                             "color": m.color_name,
                             "text": m.extracted_text,
@@ -567,15 +567,15 @@ class PdfIngestPipeline:
                             "bbox": m.rect.model_dump(),
                         }
                         for m in p.vector_marks
-                        if m.kind == "highlight_stroke"
+                        if m.kind == "marker_candidate"
                     ],
                     "suspect_native_regions": [r.model_dump() for r in p.suspect_native_regions],
                     "ocr_targets": ocr_targets.get(p.page_number, []),
                     "review_crops": review_crops.get(p.page_number, []),
-                    "red_pen_regions": [
+                    "red_vector_regions": [
                         m.rect.model_dump()
                         for m in p.vector_marks
-                        if m.kind == "red_pen_stroke"
+                        if m.kind == "red_vector_evidence"
                     ],
                 }
                 for p in inspection.pages

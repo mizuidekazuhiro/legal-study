@@ -25,8 +25,8 @@ def test_inspector_detects_flattened_vector_marks(tmp_path: Path) -> None:
     result = PdfInspector(min_native_chars=5).inspect(pdf_path)
     inspected = result.pages[0]
     kinds = {mark.kind for mark in inspected.vector_marks}
-    assert "highlight_stroke" in kinds
-    assert "red_pen_stroke" in kinds
+    assert "marker_candidate" in kinds
+    assert "red_vector_evidence" in kinds
     assert inspected.vision_review_recommended is True
 
 
@@ -65,6 +65,18 @@ def test_inspector_preserves_raw_pdf_evidence(tmp_path: Path) -> None:
     shape.draw_line((50, 100), (145, 100))
     shape.finish(color=(0.1, 0.2, 0.3), width=4, stroke_opacity=0.4)
     shape.commit()
+    shape = page.new_shape()
+    shape.draw_rect(fitz.Rect(50, 120, 145, 140))
+    shape.finish(color=None, fill=(0.3450828, 0.6941177, 1.0), fill_opacity=0.5)
+    shape.commit()
+    shape = page.new_shape()
+    shape.draw_line((50, 160), (145, 160))
+    shape.finish(color=(1.0, 0.1647059, 0.1333181), width=9)
+    shape.commit()
+    shape = page.new_shape()
+    shape.draw_rect(fitz.Rect(50, 180, 145, 200))
+    shape.finish(color=None, fill=(1.0, 0.1647059, 0.1333181), fill_opacity=0.6)
+    shape.commit()
     pixmap = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 2, 2), False)
     pixmap.clear_with(255)
     page.insert_image(fitz.Rect(200, 200, 250, 250), pixmap=pixmap)
@@ -83,7 +95,8 @@ def test_inspector_preserves_raw_pdf_evidence(tmp_path: Path) -> None:
     assert raw_annotation["info"]["title"] == "reviewer"
     assert raw_annotation["vertices"]
 
-    assert len(inspected.raw_vector_drawings) >= 2
+    assert len(inspected.raw_vector_drawings) == inspected.drawing_count
+    assert len(inspected.raw_vector_drawings) >= 4
     unknown_stroke = next(
         drawing
         for drawing in inspected.raw_vector_drawings
@@ -92,6 +105,28 @@ def test_inspector_preserves_raw_pdf_evidence(tmp_path: Path) -> None:
     assert unknown_stroke.raw["width"] == 4.0
     assert unknown_stroke.raw["stroke_opacity"] == pytest.approx(0.4)
     assert unknown_stroke.raw["items"]
+    unknown_index = unknown_stroke.drawing_index
+    assert all(mark.drawing_index != unknown_index for mark in inspected.vector_marks)
+
+    blue_fill = next(
+        mark
+        for mark in inspected.vector_marks
+        if mark.kind == "marker_candidate" and mark.color_name == "blue"
+    )
+    assert blue_fill.paint == "fill"
+    assert blue_fill.opacity == pytest.approx(0.5)
+    thick_red = next(
+        mark
+        for mark in inspected.vector_marks
+        if mark.kind == "red_vector_evidence" and mark.width == 9.0
+    )
+    assert thick_red.paint == "stroke"
+    red_fill = next(
+        mark
+        for mark in inspected.vector_marks
+        if mark.kind == "red_vector_evidence" and mark.paint == "fill"
+    )
+    assert red_fill.opacity == pytest.approx(0.6)
 
     assert len(inspected.raw_image_regions) == 1
     image = inspected.raw_image_regions[0]

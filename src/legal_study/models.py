@@ -55,6 +55,8 @@ class RawImageRegion(BaseModel):
 
 
 class VectorMark(BaseModel):
+    drawing_index: int
+    paint: str
     kind: str
     color_name: str | None = None
     color_rgb: tuple[float, float, float] | None = None
