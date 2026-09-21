@@ -5,6 +5,8 @@ import json
 import os
 from pathlib import Path
 
+import pymupdf
+
 from legal_study.io_utils import atomic_output_path, atomic_write_json, file_sha256
 from legal_study.models import BBox, DocumentInspection
 from legal_study.pdf.inspector import PdfInspector
@@ -506,10 +508,13 @@ class PdfIngestPipeline:
 
     @staticmethod
     def _clip_box(page_rect, box: BBox, padding: float):
-        import fitz
-
         return (
-            fitz.Rect(box.x0 - padding, box.y0 - padding, box.x1 + padding, box.y1 + padding)
+            pymupdf.Rect(
+                box.x0 - padding,
+                box.y0 - padding,
+                box.x1 + padding,
+                box.y1 + padding,
+            )
             & page_rect
         )
 
@@ -523,10 +528,8 @@ class PdfIngestPipeline:
         artifact_root: Path,
         dpi: int = 450,
     ) -> dict[int, list[dict[str, object]]]:
-        import fitz
-
         crop_dir.mkdir(parents=True, exist_ok=True)
-        document = fitz.open(source)
+        document = pymupdf.open(source)
         manifest: dict[int, list[dict[str, object]]] = {}
         try:
             for inspected_page in inspection.pages:
@@ -568,10 +571,8 @@ class PdfIngestPipeline:
         This is the surgical OCR path. It avoids replacing an otherwise-good PDF
         text layer merely because a few glyphs are corrupted.
         """
-        import fitz
-
         crop_dir.mkdir(parents=True, exist_ok=True)
-        document = fitz.open(source)
+        document = pymupdf.open(source)
         manifest: dict[int, list[dict[str, object]]] = {}
         try:
             for inspected_page in inspection.pages:

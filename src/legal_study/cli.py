@@ -57,7 +57,7 @@ def doctor() -> None:
         "Python": platform.python_version(),
         "Platform": platform.platform(),
         "Workspace": str(settings.home),
-        "PyMuPDF": "OK" if importlib.util.find_spec("fitz") else "MISSING",
+        "PyMuPDF": "OK" if importlib.util.find_spec("pymupdf") else "MISSING",
         "Pillow": "OK" if importlib.util.find_spec("PIL") else "MISSING",
         "PaddleOCR": (
             "installed" if importlib.util.find_spec("paddleocr") else "optional/not installed"

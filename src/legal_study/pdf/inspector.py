@@ -5,7 +5,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
-import fitz
+import pymupdf
 
 from legal_study.io_utils import atomic_output_path
 from legal_study.models import (
@@ -61,7 +61,7 @@ class PdfInspector:
             raise ValueError("render_dir must be inside artifact_root")
 
         sha = self._sha256(source_path)
-        document = fitz.open(source_path)
+        document = pymupdf.open(source_path)
         inspected: list[PageInspection] = []
         page_count = document.page_count
         try:
@@ -86,7 +86,7 @@ class PdfInspector:
 
     def _inspect_page(
         self,
-        page: fitz.Page,
+        page: pymupdf.Page,
         page_number: int,
         output_dir: Path | None,
         artifact_root: Path | None,
@@ -184,13 +184,13 @@ class PdfInspector:
 
     @staticmethod
     def _image_coverage(
-        page: fitz.Page, image_info: list[dict[str, Any]]
+        page: pymupdf.Page, image_info: list[dict[str, Any]]
     ) -> tuple[float, float]:
         page_area = max(page.rect.get_area(), 1.0)
         areas: list[float] = []
         seen: set[tuple[float, float, float, float]] = set()
         for image in image_info:
-            rect = fitz.Rect(image["bbox"])
+            rect = pymupdf.Rect(image["bbox"])
             key = tuple(round(v, 2) for v in rect)
             if key in seen:
                 continue
@@ -199,7 +199,7 @@ class PdfInspector:
         return min(1.0, sum(areas)), min(1.0, max(areas, default=0.0))
 
     @classmethod
-    def _raw_native(cls, page: fitz.Page) -> dict[str, Any]:
+    def _raw_native(cls, page: pymupdf.Page) -> dict[str, Any]:
         data = page.get_text("rawdict", sort=False)
         # Image bytes are deliberately represented by get_image_info metadata
         # instead. Text blocks retain the PDF extraction order and per-character
@@ -216,7 +216,7 @@ class PdfInspector:
     ) -> list[RawVectorDrawing]:
         output: list[RawVectorDrawing] = []
         for index, drawing in enumerate(drawings):
-            rect = fitz.Rect(drawing["rect"])
+            rect = pymupdf.Rect(drawing["rect"])
             output.append(
                 RawVectorDrawing(
                     drawing_index=index,
@@ -232,7 +232,7 @@ class PdfInspector:
     ) -> list[RawImageRegion]:
         output: list[RawImageRegion] = []
         for index, image in enumerate(image_info):
-            rect = fitz.Rect(image["bbox"])
+            rect = pymupdf.Rect(image["bbox"])
             digest = image.get("digest")
             output.append(
                 RawImageRegion(
@@ -255,21 +255,21 @@ class PdfInspector:
             return {str(key): cls._json_safe(item) for key, item in value.items()}
         if isinstance(value, list | tuple):
             return [cls._json_safe(item) for item in value]
-        if isinstance(value, fitz.Rect | fitz.IRect):
+        if isinstance(value, pymupdf.Rect | pymupdf.IRect):
             return {"type": "rect", "values": [float(item) for item in value]}
-        if isinstance(value, fitz.Point):
+        if isinstance(value, pymupdf.Point):
             return {"type": "point", "values": [float(value.x), float(value.y)]}
-        if isinstance(value, fitz.Quad):
+        if isinstance(value, pymupdf.Quad):
             return {
                 "type": "quad",
                 "values": [[float(point.x), float(point.y)] for point in value],
             }
-        if isinstance(value, fitz.Matrix):
+        if isinstance(value, pymupdf.Matrix):
             return {"type": "matrix", "values": [float(item) for item in value]}
         raise TypeError(f"Unsupported PyMuPDF evidence value: {type(value).__name__}")
 
     @staticmethod
-    def _spans(page: fitz.Page) -> list[NativeSpan]:
+    def _spans(page: pymupdf.Page) -> list[NativeSpan]:
         output: list[NativeSpan] = []
         data = page.get_text("dict", sort=True)
         for block in data.get("blocks", []):
@@ -306,7 +306,7 @@ class PdfInspector:
         return regions
 
     @staticmethod
-    def _annotations(page: fitz.Page) -> list[PdfAnnotation]:
+    def _annotations(page: pymupdf.Page) -> list[PdfAnnotation]:
         out: list[PdfAnnotation] = []
         annot = page.first_annot
         while annot is not None:
@@ -315,7 +315,9 @@ class PdfInspector:
             if annotation_vertices:
                 vertices = [
                     (float(point.x), float(point.y))
-                    for point in (fitz.Point(value) for value in annotation_vertices)
+                    for point in (
+                        pymupdf.Point(value) for value in annotation_vertices
+                    )
                 ]
             rect = annot.rect
             type_code, type_name = annot.type

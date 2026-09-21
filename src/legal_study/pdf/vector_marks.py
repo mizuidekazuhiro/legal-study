@@ -4,7 +4,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from math import sqrt
 
-import fitz
+import pymupdf
 
 from legal_study.models import BBox, VectorMark
 from legal_study.pdf.quality import suspicious_char_count
@@ -36,21 +36,23 @@ def nearest_color(rgb: tuple[float, float, float] | None, tolerance: float = 0.1
     return candidate.name if _distance(rgb, candidate.rgb) <= tolerance else None
 
 
-def _bbox(rect: fitz.Rect) -> BBox:
+def _bbox(rect: pymupdf.Rect) -> BBox:
     return BBox(x0=rect.x0, y0=rect.y0, x1=rect.x1, y1=rect.y1)
 
 
-def _extract_words(page: fitz.Page, rect: fitz.Rect, stroke_width: float) -> str | None:
+def _extract_words(
+    page: pymupdf.Page, rect: pymupdf.Rect, stroke_width: float
+) -> str | None:
     # Highlighter strokes run through the middle of glyphs. Expanding vertically
     # gives a stable intersection against PDF word boxes while preserving x bounds.
-    probe = fitz.Rect(rect)
+    probe = pymupdf.Rect(rect)
     probe.y0 -= stroke_width / 2 + 1.0
     probe.y1 += stroke_width / 2 + 1.0
 
     hits: list[tuple[int, int, int, str]] = []
     for word in page.get_text("words", sort=True):
         x0, y0, x1, y1, text, block_no, line_no, word_no = word[:8]
-        wr = fitz.Rect(x0, y0, x1, y1)
+        wr = pymupdf.Rect(x0, y0, x1, y1)
         if wr.is_empty:
             continue
         intersection = wr & probe
@@ -76,7 +78,7 @@ def _opacity(value: object) -> float:
 
 
 def extract_vector_marks(
-    page: fitz.Page, *, drawings: Sequence[dict[str, object]] | None = None
+    page: pymupdf.Page, *, drawings: Sequence[dict[str, object]] | None = None
 ) -> list[VectorMark]:
     """Classify vector candidates without controlling raw evidence retention.
 
@@ -86,7 +88,7 @@ def extract_vector_marks(
     marks: list[VectorMark] = []
     source_drawings = drawings if drawings is not None else page.get_drawings()
     for drawing_index, drawing in enumerate(source_drawings):
-        rect = fitz.Rect(drawing["rect"])
+        rect = pymupdf.Rect(drawing["rect"])
         width_value = drawing.get("width")
         width = float(width_value) if width_value is not None else None
         paint_values = (
@@ -155,13 +157,15 @@ def cluster_red_vector_evidence(
 ) -> list[BBox]:
     """Cluster red stroke/fill evidence into crop-sized regions for Vision review."""
     rects = [
-        fitz.Rect(m.rect.x0, m.rect.y0, m.rect.x1, m.rect.y1)
+        pymupdf.Rect(m.rect.x0, m.rect.y0, m.rect.x1, m.rect.y1)
         for m in marks
         if m.kind == "red_vector_evidence"
     ]
-    clusters: list[fitz.Rect] = []
+    clusters: list[pymupdf.Rect] = []
     for rect in rects:
-        expanded = fitz.Rect(rect.x0 - gap, rect.y0 - gap, rect.x1 + gap, rect.y1 + gap)
+        expanded = pymupdf.Rect(
+            rect.x0 - gap, rect.y0 - gap, rect.x1 + gap, rect.y1 + gap
+        )
         merged_index = None
         for i, cluster in enumerate(clusters):
             if not (expanded & cluster).is_empty:
@@ -176,10 +180,10 @@ def cluster_red_vector_evidence(
     changed = True
     while changed:
         changed = False
-        out: list[fitz.Rect] = []
+        out: list[pymupdf.Rect] = []
         while clusters:
             current = clusters.pop()
-            expanded = fitz.Rect(
+            expanded = pymupdf.Rect(
                 current.x0 - gap, current.y0 - gap, current.x1 + gap, current.y1 + gap
             )
             hit = None
