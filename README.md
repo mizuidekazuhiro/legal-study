@@ -1,14 +1,35 @@
 # legal-study
 
-司法試験・予備試験の論文学習を、**再開可能・検証可能・原文優先**で処理するためのローカルPythonアプリです。
+巨大な司法試験・予備試験教材PDFから、ChatGPT Projectがすぐにカード・ノート作成へ入れる高信頼な問題別Markdownを、**再開可能・検証可能・原文優先**で生成するためのローカルPythonアプリです。
 
 現在の v0.1 は、最も事故が起きやすい **PDF読込レイヤ** を先に実装しています。単純に全ページOCRを掛けるのではなく、ページごとに最も信頼できる情報源を使い分けます。
 
 ## ローカルファースト
 
-外出先のPCでも動かせるよう、コア処理は Google Drive / Notion / Obsidian / 固定ドライブ文字に依存しません。PDFがローカルにあれば、検査・レンダリング・vector mark検出・OCR対象抽出・ローカル保存まで単体で動作する設計です。
+外出先のCPU-only Windows PCでも動かせるよう、コア処理はクラウドサービス、固定ドライブ文字、特定checkout先に依存しません。PDFがローカルにあれば、source snapshot・検査・レンダリング・vector mark検出・OCR対象抽出・ローカル保存まで単体で動作します。GPUは任意の高速化手段です。
 
 可変データは標準で `~/.legal-study/` 配下に置きます。別の場所を使う場合は `LEGAL_STUDY_HOME` を設定してください。詳細は [`docs/local-first.md`](docs/local-first.md) を参照してください。
+
+入力PDFは最初に `~/.legal-study/sources/sha256/<sha256>.pdf` へcontent-addressed snapshotとして保存します。以後の解析はsnapshotだけを読み、元のOneDrive、Google Drive、USB等のファイルを再openしません。
+
+## 最終成果物
+
+目標フローは次のとおりです。
+
+```text
+PDF
+  → immutable source snapshot
+  → raw native / annotation / vector / image evidence
+  → selective / surgical OCR
+  → native / OCR evidence reconciliation
+  → needs_review抽出
+  → canonical_source.json
+  → <subject>_<question>_problem.md
+  → 視覚確認が必要なevidence PNGのみ添付
+  → ChatGPT Projectへアップロード
+```
+
+Anki生成、Obsidian生成、Notion登録、Google Drive書込みは現在の実装scopeに含めません。
 
 ## v0.1 の方針
 
@@ -25,7 +46,7 @@ PDF
           ↓
   Vision review manifest
           ↓
- later: canonical source → Anki / Obsidian / Notion
+ later: reconciliation → canonical source → problem Markdown
 ```
 
 特に現在の教材PDFでは、PDF Annotation が0件でも、黄色・青・橙のマーカーや赤ペンが **vector drawing** として残っているページがあります。v0.1はこれを直接検出し、太い半透明ストロークとPDF本文のword boxを交差させて「マーカー候補原文」を取り出します。赤い細線は意味を推測せず、後段Vision確認用の証拠として保持します。
@@ -58,7 +79,7 @@ legal-study inspect ".\materials\論文マスター_刑法.pdf" --pages 110-116 
 
 ## ingest artifactを作る
 
-出力先を省略すると、PDFのSHA-256を含むローカルrunディレクトリを自動作成します。
+出力先を省略すると、source SHA-256と入力設定hashを含むローカルrunディレクトリを自動作成します。同一入力はSQLite step stateとartifact hashを検証してresumeし、異なる入力を同じ出力先へ混在させません。
 
 ```powershell
 legal-study ingest ".\materials\論文マスター_刑法.pdf" --subject criminal --question 12 --pages 110-116
@@ -67,6 +88,8 @@ legal-study ingest ".\materials\論文マスター_刑法.pdf" --subject crimina
 出力:
 
 - `inspection.json`
+- `run_manifest.json`
+- `evidence_crops.json`
 - `review_manifest.json`
 - `ocr.json`
 - `renders/page-XXXX.png`
@@ -87,6 +110,9 @@ v0.1ではPaddleOCRは `PP-OCRv6` / `lang="japan"` を明示して使います�
 ## 重要な安全設計
 
 - PDF SHA-256を保存し、PDF差替え時の古い抽出結果再利用を防止。
+- 元PDFをcontent-addressed storeへsnapshot後、全解析をsnapshotだけから実行。
+- run input hash、step status、input/output hash、retry、error、versionをSQLiteに保存。
+- JSON・render・cropをatomicに公開し、hash不一致の旧artifactは削除せず`orphans/`へ退避。
 - OCRは「native textが不足/低品質」のページに限定。
 - 壊れたUnicode mappingはページ全体ではなく該当spanを**surgical OCR**対象にする。
 - マーカー色から法的役割を自動推測しない。
@@ -97,11 +123,11 @@ v0.1ではPaddleOCRは `PP-OCRv6` / `lang="japan"` を明示して使います�
 
 ## 次の実装
 
-1. native text / PaddleOCR / Vision の差分照合
-2. マーカー開始文字・終了文字の厳密確定
-3. `canonical_source.json` の生成
-4. SQLiteによるrun state / resume
-5. 刑法Anki/Obsidian generator
-6. Google Drive Inbox / Notion connector
+1. raw annotation / vector / image evidenceのlossless保存
+2. native text / PaddleOCR / Vision evidenceの差分照合
+3. `needs_review`とevidence PNGの生成
+4. マーカー開始文字・終了文字の厳密確定
+5. `canonical_source.json` の生成
+6. `<subject>_<question>_problem.md` の生成
 
 最終調整はローカルCodexで行いやすいよう、各処理を独立モジュールに分割してあります。

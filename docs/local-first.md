@@ -2,9 +2,9 @@
 
 ## Goal
 
-The core PDF pipeline must work on a laptop away from home without depending on a fixed drive letter, Google Drive being mounted, Obsidian being installed, Notion being reachable, or a cloud worker being online.
+The core PDF pipeline must work on a CPU-only Windows laptop away from home without depending on a fixed drive letter, a mounted cloud drive, or an online service. GPU execution is an optional optimization.
 
-Cloud connectors are later sinks/sources, not the execution environment.
+The local terminal artifact is a high-trust problem Markdown packet for manual upload to a ChatGPT Project.
 
 ## Workspace
 
@@ -12,6 +12,7 @@ By default all mutable state lives under the user profile:
 
     ~/.legal-study/
       runs/
+      sources/sha256/
       cache/
       models/
       tmp/
@@ -27,9 +28,9 @@ The repository remains code-only. Copyrighted PDFs, renders, OCR artifacts, toke
 
 ## Input PDFs
 
-A PDF may come from any readable local path: a temporarily downloaded Google Drive file, Dropbox offline file, USB/local SSD, manually copied study-material folder, or a future connector cache.
+A PDF may come from any readable local path: a temporarily downloaded cloud-drive file, USB/local SSD, or manually copied study-material folder.
 
-The run directory includes the source SHA-256. If the PDF changes, a new run path is created rather than silently reusing stale extraction.
+Before inspection, the PDF is copied to `sources/sha256/<sha256>.pdf`. After snapshot creation, the original path is never reopened by the ingest pipeline. A changed PDF creates a different source object and run path rather than silently reusing stale extraction.
 
 Example:
 
@@ -43,7 +44,7 @@ After packages are installed, native PDF text/coordinates, annotation extraction
 
 PaddleOCR model/runtime availability is machine-dependent. Pre-download/cache the required model files before travel if offline OCR will be needed.
 
-LLM/Vision review, Google Drive writes, and Notion writes are later stages. A run may stop before them and resume later.
+LLM/Vision review is a later local evidence stage. A run may stop before it and resume later. Drive, Notion, Obsidian, and Anki writes are outside the current implementation scope.
 
 ## Recommended travel setup
 
@@ -53,10 +54,10 @@ LLM/Vision review, Google Drive writes, and Notion writes are later stages. A ru
 4. Keep needed source PDFs available offline.
 5. Pre-warm OCR models before leaving a reliable connection.
 6. Perform PDF inspection/ingest locally while travelling.
-7. Sync/register to Drive/Notion later when network access is available.
+7. Upload the completed problem Markdown and only the required evidence PNGs to ChatGPT Project.
 
 ## Local Codex handoff
 
-The code is separated so local Codex can adjust modules independently: pdf/inspector.py for routing, pdf/vector_marks.py for PDF drawing evidence, pdf/ocr for OCR adapters, pdf/pipeline.py for artifact orchestration, settings.py for machine-independent local paths, later state/ for SQLite resume, and later generators/ for canonical source to Anki/Obsidian.
+The code is separated so local Codex can adjust modules independently: source_store.py for immutable inputs, run_manifest.py for run identity, state/ for SQLite resume, pdf/inspector.py for routing, pdf/vector_marks.py for PDF drawing evidence, pdf/ocr for OCR adapters, and pdf/pipeline.py for artifact orchestration.
 
-The next local-Codex task should add SQLite run state and native/OCR/Vision reconciliation without introducing hard-coded machine paths.
+The next local-Codex task should preserve raw annotation/vector/image evidence and add native/OCR/Vision reconciliation without introducing hard-coded machine paths.

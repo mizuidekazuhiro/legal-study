@@ -24,6 +24,21 @@ This follows the same broad selective-OCR idea used by projects such as Marker a
 Docling, while preserving study-specific evidence that generic PDF-to-Markdown tools
 normally discard.
 
+## Immutable source boundary
+
+Before parsing begins, the input file is copied once to
+`~/.legal-study/sources/sha256/<sha256>.pdf`. Source size and modification time are
+checked before and after the copy. The stored content is verified against its path
+hash whenever a run starts. Inspect, render, crop, and OCR stages receive a
+`SourceSnapshot` and only reopen the immutable snapshot; the original file is retained
+only as provenance metadata.
+
+Each run has a manifest containing the full source hash, input hash, selected pages,
+pipeline settings, application/parser/runtime versions, and page count. SQLite stores
+each step's status, timestamps, input/output hash, retry count, error, and step version.
+Completed steps resume only when their artifact bundle hashes still match. Invalid
+artifacts are preserved below `orphans/` before regeneration.
+
 ## Study-PDF-specific advantage: flattened vector marks
 
 The current criminal-law source PDF contains pages where PDF Annotation objects are
@@ -69,8 +84,10 @@ quality, geometry, and later Vision review are preserved separately.
 
 `legal-study ingest` produces:
 
+- `run_manifest.json`: immutable source identity, input identity, and runtime versions.
 - `renders/page-NNNN.png`: high-resolution page evidence.
 - `inspection.json`: text, spans, images, annotations, vector marks, and page mode.
+- `evidence_crops.json`: crop inventory used by resumable downstream steps.
 - `ocr.json`: OCR results only for pages/regions where OCR was requested.
 - `review_manifest.json`: compact list of pages/regions that still require review.
 - `ocr_crops/`: surgical OCR crops for suspicious native spans.
@@ -78,3 +95,13 @@ quality, geometry, and later Vision review are preserved separately.
 
 The source SHA-256 is always recorded so a changed PDF cannot silently reuse stale
 extraction results.
+
+## Target packet
+
+The planned terminal local artifact is `<subject>_<question>_problem.md`, generated from
+`canonical_source.json`. Verified text is included in full. Ambiguous content remains
+`needs_review` with page, bbox, crop image, native candidate, OCR candidate, reason, and
+confidence. Only regions that require visual confirmation are attached as PNG evidence.
+
+Anki, Obsidian, Notion, and Google Drive automation are intentionally outside the
+current scope. The packet is designed for manual upload to a ChatGPT Project.
