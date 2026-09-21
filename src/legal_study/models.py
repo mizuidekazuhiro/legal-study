@@ -28,6 +28,16 @@ class NativeSpan(BaseModel):
     color: int | None = None
 
 
+class NativeChar(BaseModel):
+    index: int
+    char: str
+    bbox: BBox
+    block: int
+    line: int
+    span: int
+    char_in_span: int
+
+
 class PdfAnnotation(BaseModel):
     xref: int
     type_code: int
@@ -91,6 +101,7 @@ class PageInspection(BaseModel):
     ocr_recommended: bool
     vision_review_recommended: bool
     spans: list[NativeSpan] = Field(default_factory=list)
+    native_chars: list[NativeChar] = Field(default_factory=list)
     raw_native: dict[str, Any] = Field(default_factory=dict)
     annotations: list[PdfAnnotation] = Field(default_factory=list)
     raw_vector_drawings: list[RawVectorDrawing] = Field(default_factory=list)
