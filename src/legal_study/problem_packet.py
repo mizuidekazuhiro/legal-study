@@ -14,6 +14,7 @@ from legal_study.reconciliation import (
     ReviewStatus,
     normalize_for_comparison,
 )
+from legal_study.repair import RepairResult
 from legal_study.run_manifest import RunManifest
 from legal_study.workspace import safe_path_component
 
@@ -306,12 +307,14 @@ def build_canonical_source(
     manifest: RunManifest,
     inspection: DocumentInspection,
     reconciliation: ReconciliationResult,
+    repair: RepairResult,
     ocr_payload: dict[str, Any],
 ) -> dict[str, Any]:
     if inspection.sha256 != manifest.source.sha256:
         raise ValueError("Inspection/source SHA mismatch")
     markers: list[dict[str, Any]] = []
     page_payloads: list[dict[str, Any]] = []
+    repair_by_page = {page.page_number: page for page in repair.pages}
     for page in inspection.pages:
         page_markers = [
             _marker_record(page, mark, index)
@@ -321,10 +324,23 @@ def build_canonical_source(
             )
         ]
         markers.extend(page_markers)
+        repaired_page = repair_by_page.get(page.page_number)
         page_payloads.append(
             {
                 "page_number": page.page_number,
+                "embedded_text": page.native_text,
                 "native_text": page.native_text,
+                "reconciled_text": (
+                    repaired_page.reconciled_text if repaired_page else page.native_text
+                ),
+                "text_layer_trust": page.text_layer_trust.value,
+                "text_layer_origin": page.text_layer_origin.value,
+                "repair_auto_count": (
+                    repaired_page.auto_repaired_count if repaired_page else 0
+                ),
+                "repair_review_count": (
+                    repaired_page.review_required_count if repaired_page else 0
+                ),
                 "native_quality_score": page.native_quality_score,
                 "native_char_count": page.native_char_count,
                 "raw_native_char_count": len(_iter_native_chars(page)),
@@ -373,7 +389,7 @@ def build_canonical_source(
     ocr_supplements = build_ocr_supplements(reconciliation)
 
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "subject": manifest.subject,
         "question": manifest.question,
         "source": {
@@ -395,6 +411,7 @@ def build_canonical_source(
             "counts": reconciliation.counts,
             "records": reconciliation_records,
         },
+        "repair": repair.model_dump(mode="json"),
         "markers": markers,
         "logical_markers": logical_markers,
         "ocr_supplements": ocr_supplements,
@@ -404,6 +421,7 @@ def build_canonical_source(
             "ocr": "ocr.json",
             "review_manifest": "review_manifest.json",
             "reconciliation": "reconciliation.json",
+            "repair": "repair.json",
         },
         "ocr_backend": ocr_payload.get("backend"),
     }
@@ -443,7 +461,7 @@ def render_problem_markdown(canonical: dict[str, Any]) -> str:
         f"- PDF page count: {source['page_count']}",
         f"- Requested pages: {source['requested_pages']}",
         "",
-        "# Extracted / Reconciled Text",
+        "# Reconciled Text",
         "",
     ]
     for page in pages:
@@ -451,7 +469,23 @@ def render_problem_markdown(canonical: dict[str, Any]) -> str:
             [
                 f"## PDF page {page['page_number']}",
                 "",
-                str(page["native_text"]).rstrip(),
+                f"- Text-layer trust: {page['text_layer_trust']}",
+                f"- Text-layer origin: {page['text_layer_origin']}",
+                f"- Auto repairs: {page['repair_auto_count']}",
+                f"- Repair review: {page['repair_review_count']}",
+                "",
+                str(page["reconciled_text"]).rstrip(),
+                "",
+            ]
+        )
+
+    lines.extend(["# Embedded Text Evidence", ""])
+    for page in pages:
+        lines.extend(
+            [
+                f"## Embedded PDF page {page['page_number']}",
+                "",
+                str(page["embedded_text"]).rstrip(),
                 "",
             ]
         )
@@ -525,8 +559,10 @@ def render_problem_markdown(canonical: dict[str, Any]) -> str:
         [
             "# Extraction Notes",
             "",
-            "- Native PDF text is preserved verbatim; OCR does not replace it automatically.",
-            "- OCR and native text remain separate evidence until reconciliation.",
+            "- Embedded PDF text is preserved verbatim as audit evidence.",
+            "- Reconciled text may contain only provenance-recorded AUTO_REPAIRED substitutions.",
+            "- Numeric/legal citations and ambiguous repairs remain review-required.",
+            "- OCR and embedded text remain separate evidence in canonical artifacts.",
             "- Marker colors are recorded without inferring legal meaning.",
             "- Red vector evidence is never interpreted as a correction automatically.",
             "",
@@ -579,6 +615,18 @@ def validate_problem_packet(
             checks["yaml_parseable"] = False
     checks["native_text_present"] = all(
         page.native_text.rstrip() in markdown for page in inspection.pages
+    )
+    canonical_pages = {
+        int(page["page_number"]): page for page in canonical["pages"]
+    }
+    checks["reconciled_text_present"] = all(
+        str(canonical_pages[page.page_number]["reconciled_text"]).rstrip() in markdown
+        for page in inspection.pages
+    )
+    checks["text_layer_provenance_present"] = all(
+        canonical_pages[page.page_number].get("text_layer_trust")
+        and canonical_pages[page.page_number].get("text_layer_origin")
+        for page in inspection.pages
     )
     checks["ocr_supplements_present"] = all(
         str(item["text"]).rstrip() in markdown
@@ -634,7 +682,7 @@ def validate_problem_packet(
     )
     provenance_refs = [
         canonical["provenance"].get(key)
-        for key in ("inspection", "ocr", "review_manifest", "reconciliation")
+        for key in ("inspection", "ocr", "review_manifest", "reconciliation", "repair")
     ]
     checks["provenance_present"] = all(provenance_refs)
     provenance_files_ok = True
@@ -682,10 +730,13 @@ def write_problem_packet(
     manifest: RunManifest,
     inspection: DocumentInspection,
     reconciliation: ReconciliationResult,
+    repair: RepairResult,
     ocr_payload: dict[str, Any],
 ) -> tuple[Path, Path, dict[str, Any]]:
     canonical_path = run_dir / "canonical_source.json"
-    canonical = build_canonical_source(manifest, inspection, reconciliation, ocr_payload)
+    canonical = build_canonical_source(
+        manifest, inspection, reconciliation, repair, ocr_payload
+    )
     atomic_write_json(canonical_path, canonical)
     markdown_path = run_dir / problem_markdown_filename(manifest.subject, manifest.question)
     atomic_write_text(markdown_path, render_problem_markdown(canonical))
