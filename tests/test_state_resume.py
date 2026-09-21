@@ -9,7 +9,7 @@ from legal_study.pdf.pipeline import PdfIngestPipeline
 from legal_study.run_manifest import prepare_run
 from legal_study.settings import LocalSettings
 from legal_study.source_store import snapshot_source
-from legal_study.state import RunStateStore, StepStatus
+from legal_study.state import RunStateMissingError, RunStateStore, StepStatus
 
 
 class CountingInspector(PdfInspector):
@@ -130,7 +130,37 @@ def test_corrupt_render_invalidates_completed_inspection_step(tmp_path: Path) ->
 
     assert inspector.calls == 2
     assert render.read_bytes().startswith(b"\x89PNG")
+    orphans = list((prepared.output_dir / "orphans" / "PDF_INSPECTED").glob("*.orphan"))
+    assert any(path.read_bytes() == b"corrupt" for path in orphans)
     state = RunStateStore(settings.state_db)
     step = state.get_step(prepared.manifest.run_id, "PDF_INSPECTED")
     assert step is not None
     assert step.retry_count == 1
+
+
+def test_missing_state_db_never_overwrites_existing_artifacts(tmp_path: Path) -> None:
+    source = tmp_path / "source.pdf"
+    _blank_pdf(source)
+    settings = LocalSettings(home=tmp_path / "home")
+    snapshot = snapshot_source(source, settings=settings)
+    engine = FlakyOcr()
+    engine.calls = 1
+    pipeline = PdfIngestPipeline(ocr_engine=engine)
+    prepared = prepare_run(
+        snapshot=snapshot,
+        subject="criminal",
+        question="18",
+        pages=None,
+        pipeline_config=pipeline.input_config(),
+        settings=settings,
+    )
+    pipeline.run(snapshot, prepared)
+    original = (prepared.output_dir / "ocr.json").read_bytes()
+    settings.state_db.unlink()
+    settings.state_db.with_name(f"{settings.state_db.name}-wal").unlink(missing_ok=True)
+    settings.state_db.with_name(f"{settings.state_db.name}-shm").unlink(missing_ok=True)
+
+    with pytest.raises(RunStateMissingError):
+        pipeline.run(snapshot, prepared)
+
+    assert (prepared.output_dir / "ocr.json").read_bytes() == original

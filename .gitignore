@@ -10,6 +10,7 @@ artifacts/
 renders/
 ocr_crops/
 review_crops/
+orphans/
 sources/sha256/
 cache/
 models/

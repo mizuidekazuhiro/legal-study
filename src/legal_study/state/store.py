@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
@@ -8,6 +10,10 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from legal_study.run_manifest import RunManifest
+
+
+class RunStateMissingError(RuntimeError):
+    """Raised rather than overwriting artifacts whose persistent state is missing."""
 
 
 class StepStatus(StrEnum):
@@ -39,12 +45,17 @@ class RunStateStore:
     def _now() -> str:
         return datetime.now(UTC).isoformat()
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
         connection = sqlite3.connect(self.path, timeout=30)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute("PRAGMA synchronous = FULL")
-        return connection
+        try:
+            with connection:
+                yield connection
+        finally:
+            connection.close()
 
     def _initialize(self) -> None:
         with self._connect() as connection:
@@ -112,6 +123,13 @@ class RunStateStore:
                     now,
                 ),
             )
+
+    def has_run(self, run_id: str) -> bool:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM runs WHERE run_id = ?", (run_id,)
+            ).fetchone()
+        return row is not None
 
     def set_run_status(self, run_id: str, status: str, error: str | None = None) -> None:
         with self._connect() as connection:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 
 from legal_study.io_utils import atomic_output_path, atomic_write_json, file_sha256
@@ -11,7 +12,7 @@ from legal_study.pdf.ocr.base import OcrEngine
 from legal_study.pdf.vector_marks import cluster_red_pen_marks
 from legal_study.run_manifest import PreparedRun, update_manifest_page_count
 from legal_study.source_store import SourceSnapshot, verify_snapshot
-from legal_study.state import RunStateStore
+from legal_study.state import RunStateMissingError, RunStateStore
 
 _STEP_VERSION = "1"
 
@@ -56,6 +57,11 @@ class PdfIngestPipeline:
         render_dir = out / "renders"
         out.mkdir(parents=True, exist_ok=True)
         state = RunStateStore(prepared.state_db)
+        if not state.has_run(prepared.manifest.run_id) and self._has_existing_artifacts(out):
+            raise RunStateMissingError(
+                "Run artifacts exist but their SQLite state is missing; "
+                f"refusing to overwrite {out}"
+            )
         state.register_run(prepared.manifest, prepared.manifest_path)
         try:
             self._record_source_step(state, prepared, source)
@@ -89,6 +95,53 @@ class PdfIngestPipeline:
     @staticmethod
     def _hash_values(*values: str) -> str:
         return hashlib.sha256("\0".join(values).encode()).hexdigest()
+
+    @staticmethod
+    def _has_existing_artifacts(out: Path) -> bool:
+        return any(
+            path.is_file() and path.name != "run_manifest.json"
+            for path in out.rglob("*")
+            if "orphans" not in path.parts
+        )
+
+    @staticmethod
+    def _archive_file(out: Path, step_name: str, path: Path) -> None:
+        if not path.is_file():
+            return
+        resolved_out = out.resolve()
+        resolved_path = path.resolve()
+        if not resolved_path.is_relative_to(resolved_out):
+            raise RuntimeError(f"Refusing to archive an artifact outside the run: {path}")
+        digest = file_sha256(path)
+        destination_dir = out / "orphans" / step_name
+        destination_dir.mkdir(parents=True, exist_ok=True)
+        destination = destination_dir / f"{path.name}.{digest[:16]}.orphan"
+        if destination.exists():
+            if file_sha256(destination) != digest:
+                raise RuntimeError(f"Orphan artifact hash collision: {destination}")
+            path.unlink()
+            return
+        os.replace(path, destination)
+
+    @classmethod
+    def _archive_step_artifacts(cls, out: Path, step_name: str) -> None:
+        fixed_files: list[Path]
+        generated_files: list[Path] = []
+        if step_name == "PDF_INSPECTED":
+            fixed_files = [out / "inspection.json"]
+            generated_files.extend((out / "renders").glob("*.png"))
+        elif step_name == "EVIDENCE_CROPS_RENDERED":
+            fixed_files = [out / "evidence_crops.json"]
+            generated_files.extend((out / "review_crops").glob("*.png"))
+            generated_files.extend((out / "ocr_crops").glob("*.png"))
+        elif step_name == "OCR_COMPLETE":
+            fixed_files = [out / "ocr.json"]
+        elif step_name == "REVIEW_MANIFEST_WRITTEN":
+            fixed_files = [out / "review_manifest.json"]
+        else:
+            fixed_files = []
+        for path in [*fixed_files, *generated_files]:
+            cls._archive_file(out, step_name, path)
 
     @staticmethod
     def _artifact_is_resumable(
@@ -178,19 +231,23 @@ class PdfIngestPipeline:
         artifact = prepared.output_dir / "inspection.json"
         input_hash = self._hash_values(prepared.manifest.input_hash, step_name)
         if artifact.is_file():
-            inspection = DocumentInspection.model_validate_json(
-                artifact.read_text(encoding="utf-8")
-            )
-            bundle_hash = self._inspection_bundle_hash(artifact, inspection)
-            if bundle_hash is not None and state.can_resume(
-                prepared.manifest.run_id,
-                step_name,
-                input_hash=input_hash,
-                version=_STEP_VERSION,
-                output_hash=bundle_hash,
-            ):
-                return inspection, bundle_hash
+            try:
+                inspection = DocumentInspection.model_validate_json(
+                    artifact.read_text(encoding="utf-8")
+                )
+                bundle_hash = self._inspection_bundle_hash(artifact, inspection)
+                if bundle_hash is not None and state.can_resume(
+                    prepared.manifest.run_id,
+                    step_name,
+                    input_hash=input_hash,
+                    version=_STEP_VERSION,
+                    output_hash=bundle_hash,
+                ):
+                    return inspection, bundle_hash
+            except (OSError, ValueError):
+                pass
 
+        self._archive_step_artifacts(prepared.output_dir, step_name)
         self._begin(state, prepared, step_name, input_hash)
         try:
             inspection = self.inspector.inspect(
@@ -227,21 +284,25 @@ class PdfIngestPipeline:
             file_sha256(out / "inspection.json"),
         )
         if artifact.is_file():
-            payload = json.loads(artifact.read_text(encoding="utf-8"))
-            bundle_hash = self._crop_bundle_hash(artifact, payload)
-            if bundle_hash is not None and state.can_resume(
-                prepared.manifest.run_id,
-                step_name,
-                input_hash=input_hash,
-                version=_STEP_VERSION,
-                output_hash=bundle_hash,
-            ):
-                return (
-                    self._int_keys(payload["review_crops"]),
-                    self._int_keys(payload["ocr_targets"]),
-                    bundle_hash,
-                )
+            try:
+                payload = json.loads(artifact.read_text(encoding="utf-8"))
+                bundle_hash = self._crop_bundle_hash(artifact, payload)
+                if bundle_hash is not None and state.can_resume(
+                    prepared.manifest.run_id,
+                    step_name,
+                    input_hash=input_hash,
+                    version=_STEP_VERSION,
+                    output_hash=bundle_hash,
+                ):
+                    return (
+                        self._int_keys(payload["review_crops"]),
+                        self._int_keys(payload["ocr_targets"]),
+                        bundle_hash,
+                    )
+            except (OSError, ValueError):
+                pass
 
+        self._archive_step_artifacts(prepared.output_dir, step_name)
         self._begin(state, prepared, step_name, input_hash)
         try:
             review_crops = self._render_review_crops(
@@ -304,6 +365,7 @@ class PdfIngestPipeline:
         if self._artifact_is_resumable(state, prepared, step_name, input_hash, artifact):
             return file_sha256(artifact)
 
+        self._archive_step_artifacts(prepared.output_dir, step_name)
         self._begin(state, prepared, step_name, input_hash)
         try:
             ocr_results: dict[str, object] = {"pages": {}}
@@ -354,6 +416,7 @@ class PdfIngestPipeline:
         )
         if self._artifact_is_resumable(state, prepared, step_name, input_hash, artifact):
             return file_sha256(artifact)
+        self._archive_step_artifacts(prepared.output_dir, step_name)
         self._begin(state, prepared, step_name, input_hash)
         try:
             self._write_review_manifest(

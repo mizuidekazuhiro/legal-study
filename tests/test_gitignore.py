@@ -15,6 +15,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
         "custom-output/renders/page-0001.png",
         "custom-output/ocr_crops/crop.png",
         "custom-output/review_crops/crop.png",
+        "custom-output/orphans/OCR_COMPLETE/ocr.json.abc.orphan",
         "custom-output/inspection.json",
         "custom-output/ocr.json",
         "custom-output/run_manifest.json",
