@@ -110,7 +110,7 @@ legal-study ingest ".\materials\source.pdf" --subject criminal --question sample
   --full-page-dpi 300 --image-region-dpi 300 --surgical-dpi 450
 ```
 
-v0.1ではPaddleOCR 3.7系、`PP-OCRv6` / `lang="japan"`、medium detection/recognition modelをCPUで使います。engine/library/runtime version、model名・hash、device、実行日時、DPI、crop bbox/padding、前処理、画像hash、pixel→PDF座標transformをartifactとrun inputへ保存します。DPIは300/450/600を選択でき、初期値はfull page/image region=300、surgical=450です。
+v0.1ではPaddleOCR 3.7系、PaddlePaddle 3.2系、50言語対応の`PP-OCRv6` medium detection/recognition modelをCPUで使います。PaddlePaddle 3.3.xの既知oneDNN/PIR CPU回帰を避けるため3.3未満へ固定し、oneDNNも無効化します。engine/library/runtime version、model名・hash、device、実行日時、DPI、crop bbox/padding、前処理、画像hash、pixel→PDF座標transformをartifactとrun inputへ保存します。DPIは300/450/600を選択でき、初期値はfull page/image region=300、surgical=450です。
 
 ## 重要な安全設計
 

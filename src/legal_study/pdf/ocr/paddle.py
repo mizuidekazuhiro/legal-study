@@ -91,7 +91,11 @@ def inspect_paddle_installation(model_root: Path | None = None) -> dict[str, Any
                 actual_hash = model_directory_hash(path)
             except ValueError as exc:
                 problems.append(f"invalid_model:{expected_name}:{exc}")
-        if isinstance(manifest_names, dict) and manifest_names.get(role) != expected_name:
+        if (
+            manifest
+            and isinstance(manifest_names, dict)
+            and manifest_names.get(role) != expected_name
+        ):
             problems.append(f"model_name_mismatch:{role}")
         if actual_hash is not None and not expected_hash:
             problems.append(f"missing_model_hash:{expected_name}")
@@ -111,6 +115,14 @@ def inspect_paddle_installation(model_root: Path | None = None) -> dict[str, Any
         problems.append("missing_package:paddleocr")
     if paddle_version is None:
         problems.append("missing_package:paddlepaddle")
+    if manifest and manifest.get("library_version") != paddleocr_version:
+        problems.append(
+            f"library_version_mismatch:{manifest.get('library_version')}:{paddleocr_version}"
+        )
+    if manifest and manifest.get("runtime_version") != paddle_version:
+        problems.append(
+            f"runtime_version_mismatch:{manifest.get('runtime_version')}:{paddle_version}"
+        )
     return {
         "ready": not problems,
         "device": "cpu",
@@ -127,9 +139,10 @@ def inspect_paddle_installation(model_root: Path | None = None) -> dict[str, Any
 
 def _paddle_options(root: Path) -> dict[str, Any]:
     return {
-        "lang": "japan",
-        "ocr_version": OCR_VERSION,
         "device": "cpu",
+        # PaddlePaddle 3.3.x has a known oneDNN/PIR CPU regression. Keep this
+        # disabled as a defensive setting even though the runtime is pinned to 3.2.x.
+        "enable_mkldnn": False,
         "text_detection_model_name": MODEL_NAMES["text_detection"],
         "text_recognition_model_name": MODEL_NAMES["text_recognition"],
         "textline_orientation_model_name": MODEL_NAMES["textline_orientation"],
@@ -231,7 +244,8 @@ class PaddleOcrEngine:
             device="cpu",
             offline=True,
             settings={
-                "lang": "japan",
+                "japanese_supported_by_unified_model": True,
+                "enable_mkldnn": False,
                 "use_doc_orientation_classify": False,
                 "use_doc_unwarping": False,
                 "use_textline_orientation": True,

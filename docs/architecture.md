@@ -68,8 +68,10 @@ can retain its text and still collect OCR Evidence from a pasted slide or diagra
 
 ## OCR backends
 
-The first optional adapter is PaddleOCR 3.7.x with PaddlePaddle 3.2+ and PP-OCRv6
+The first optional adapter is PaddleOCR 3.7.x with PaddlePaddle 3.2.x and PP-OCRv6
 Japanese medium detection/recognition models. It explicitly uses `device="cpu"`.
+PaddlePaddle 3.3.x is excluded because its oneDNN/PIR path has a known CPU inference
+regression; the adapter also sets `enable_mkldnn=False` defensively.
 `legal-study warmup-ocr` is the only model-download path; normal ingest first validates
 the local manifest, directories, and hashes below `~/.legal-study/models/paddleocr/`
 and fails closed if anything is missing or changed. `legal-study doctor --ocr` performs

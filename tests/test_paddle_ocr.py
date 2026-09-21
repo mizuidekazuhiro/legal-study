@@ -16,6 +16,8 @@ def _write_model_store(root: Path) -> dict[str, str]:
         (model_dir / "model.bin").write_bytes(f"model:{name}".encode())
         hashes[name] = paddle.model_directory_hash(model_dir)
     manifest = {
+        "library_version": "3.7.0",
+        "runtime_version": "3.3.1",
         "model_version": paddle.OCR_VERSION,
         "model_names": paddle.MODEL_NAMES,
         "model_hashes": hashes,
@@ -71,7 +73,7 @@ def test_offline_engine_uses_hashed_local_models_and_preserves_metadata(
     result = engine.recognize(tmp_path / "crop.png")
 
     assert calls[0]["device"] == "cpu"
-    assert calls[0]["ocr_version"] == "PP-OCRv6"
+    assert calls[0]["enable_mkldnn"] is False
     assert calls[0]["text_detection_model_dir"] == str(
         tmp_path / "official_models" / "PP-OCRv6_medium_det"
     )
@@ -102,3 +104,19 @@ def test_model_hash_mismatch_blocks_offline_use(
 
     assert status["ready"] is False
     assert "model_hash_mismatch:PP-OCRv6_medium_det" in status["problems"]
+
+
+def test_runtime_version_change_requires_manifest_refresh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_model_store(tmp_path)
+    monkeypatch.setattr(
+        paddle,
+        "_installed_version",
+        lambda name: {"paddleocr": "3.7.0", "paddlepaddle": "3.2.2"}.get(name),
+    )
+
+    status = paddle.inspect_paddle_installation(tmp_path)
+
+    assert status["ready"] is False
+    assert "runtime_version_mismatch:3.3.1:3.2.2" in status["problems"]
