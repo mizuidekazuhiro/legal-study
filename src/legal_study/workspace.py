@@ -31,7 +31,7 @@ def safe_path_component(value: str, *, fallback: str) -> str:
     sanitized = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "-", normalized).strip(" .")
     if not sanitized or sanitized in {".", ".."}:
         sanitized = fallback
-    if sanitized.upper() in _WINDOWS_RESERVED_NAMES:
+    if sanitized.split(".", 1)[0].upper() in _WINDOWS_RESERVED_NAMES:
         sanitized = f"_{sanitized}"
     return sanitized[:80]
 

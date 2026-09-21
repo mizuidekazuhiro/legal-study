@@ -98,11 +98,14 @@ class PdfIngestPipeline:
 
     @staticmethod
     def _has_existing_artifacts(out: Path) -> bool:
-        return any(
-            path.is_file() and path.name != "run_manifest.json"
-            for path in out.rglob("*")
-            if "orphans" not in path.parts
-        )
+        for path in out.rglob("*"):
+            if not path.is_file() or path.name == "run_manifest.json":
+                continue
+            relative = path.relative_to(out)
+            if relative.parts and relative.parts[0] == "orphans":
+                continue
+            return True
+        return False
 
     @staticmethod
     def _archive_file(out: Path, step_name: str, path: Path) -> None:

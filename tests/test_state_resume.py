@@ -164,3 +164,28 @@ def test_missing_state_db_never_overwrites_existing_artifacts(tmp_path: Path) ->
         pipeline.run(snapshot, prepared)
 
     assert (prepared.output_dir / "ocr.json").read_bytes() == original
+
+
+def test_output_parent_named_orphans_does_not_disable_overwrite_guard(tmp_path: Path) -> None:
+    source = tmp_path / "source.pdf"
+    _blank_pdf(source)
+    settings = LocalSettings(home=tmp_path / "home")
+    snapshot = snapshot_source(source, settings=settings)
+    pipeline = PdfIngestPipeline()
+    output = tmp_path / "orphans" / "custom-run"
+    prepared = prepare_run(
+        snapshot=snapshot,
+        subject="criminal",
+        question="19",
+        pages=None,
+        pipeline_config=pipeline.input_config(),
+        output_dir=output,
+        settings=settings,
+    )
+    pipeline.run(snapshot, prepared)
+    settings.state_db.unlink()
+    settings.state_db.with_name(f"{settings.state_db.name}-wal").unlink(missing_ok=True)
+    settings.state_db.with_name(f"{settings.state_db.name}-shm").unlink(missing_ok=True)
+
+    with pytest.raises(RunStateMissingError):
+        pipeline.run(snapshot, prepared)

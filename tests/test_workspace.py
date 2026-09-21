@@ -24,6 +24,7 @@ def test_portable_workspace_uses_configured_home(tmp_path: Path) -> None:
 def test_safe_path_component_blocks_parent_and_windows_reserved_names() -> None:
     assert safe_path_component("..", fallback="unknown") == "unknown"
     assert safe_path_component("CON", fallback="unknown") == "_CON"
+    assert safe_path_component("CON.txt", fallback="unknown") == "_CON.txt"
     assert safe_path_component('criminal:/\\*?"<>|', fallback="unknown") == "criminal---------"
 
 

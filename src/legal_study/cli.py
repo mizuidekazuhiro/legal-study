@@ -10,6 +10,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from legal_study.io_utils import atomic_write_text
 from legal_study.pdf.inspector import PdfInspector
 from legal_study.pdf.ocr.paddle import PaddleOcrEngine
 from legal_study.pdf.pipeline import PdfIngestPipeline
@@ -85,7 +86,7 @@ def inspect(
         snapshot.snapshot_path, pages=_parse_pages(pages), render_dir=render_dir
     )
     if json_output:
-        json_output.write_text(result.model_dump_json(indent=2), encoding="utf-8")
+        atomic_write_text(json_output, result.model_dump_json(indent=2) + "\n")
 
     table = Table(
         "Page", "Mode", "Chars", "TextQ", "Largest image", "Marks", "OCR", "Vision"
