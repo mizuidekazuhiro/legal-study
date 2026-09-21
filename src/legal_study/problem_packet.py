@@ -414,6 +414,17 @@ def validate_problem_packet(
     checks["native_text_present"] = all(
         page.native_text.rstrip() in markdown for page in inspection.pages
     )
+    checks["ocr_supplements_present"] = all(
+        str(item["text"]).rstrip() in markdown
+        for item in canonical["ocr_supplements"]
+        if item.get("text")
+    )
+    checks["marker_records_present"] = all(
+        str(item["id"]) in markdown for item in canonical["markers"]
+    )
+    checks["needs_review_records_present"] = all(
+        str(item["id"]) in markdown for item in canonical["needs_review"]
+    )
 
     evidence_refs = [
         str(item["evidence_image"])
@@ -437,10 +448,35 @@ def validate_problem_packet(
             raw.drawing_index == drawing_index for raw in page.raw_vector_drawings
         )
     checks["raw_vector_refs_valid"] = raw_refs_ok
-    checks["provenance_present"] = all(
+    provenance_refs = [
         canonical["provenance"].get(key)
         for key in ("inspection", "ocr", "review_manifest", "reconciliation")
-    )
+    ]
+    checks["provenance_present"] = all(provenance_refs)
+    provenance_files_ok = True
+    for reference in provenance_refs:
+        if not isinstance(reference, str):
+            provenance_files_ok = False
+            continue
+        try:
+            provenance_files_ok = (
+                provenance_files_ok and _resolve_evidence(run_dir, reference).is_file()
+            )
+        except ValueError:
+            provenance_files_ok = False
+    checks["provenance_files_exist"] = provenance_files_ok
+
+    if checks["yaml_parseable"]:
+        checks["frontmatter_needs_review_count_matches"] = (
+            int(frontmatter.get("needs_review_count", -1))
+            == len(canonical["needs_review"])
+        )
+        checks["frontmatter_source_sha_matches"] = (
+            frontmatter.get("source_sha256") == manifest.source.sha256
+        )
+    else:
+        checks["frontmatter_needs_review_count_matches"] = False
+        checks["frontmatter_source_sha_matches"] = False
 
     valid = all(checks.values())
     return {
