@@ -56,16 +56,14 @@ def _bbox_from_target(target: dict[str, Any]) -> BBox:
     return BBox(x0=values[0], y0=values[1], x1=values[2], y1=values[3])
 
 
-def _ocr_text(evidence: dict[str, Any]) -> tuple[str | None, float | None]:
-    result = evidence.get("result")
-    if not isinstance(result, dict):
-        return None, None
-    text = result.get("text")
-    confidence = result.get("confidence")
-    return (
-        str(text) if isinstance(text, str) else None,
-        float(confidence) if isinstance(confidence, int | float) else None,
-    )
+def _bbox_dict_values(value: object) -> list[float] | None:
+    if not isinstance(value, dict):
+        return None
+    candidate = [value.get("x0"), value.get("y0"), value.get("x1"), value.get("y1")]
+    if any(item is None for item in candidate):
+        return None
+    return [float(item) for item in candidate]
+
 
 def _rect_overlap_ratio(a: list[float], b: list[float]) -> float:
     ax0, ay0, ax1, ay1 = (float(value) for value in a)
@@ -77,33 +75,55 @@ def _rect_overlap_ratio(a: list[float], b: list[float]) -> float:
     return intersection / area
 
 
-def _coordinate_match(evidence: dict[str, Any], target: dict[str, Any]) -> bool | None:
-    native_bbox = target.get("native_bbox")
-    if not isinstance(native_bbox, list) or len(native_bbox) != 4:
-        return None
+def _ocr_candidate(
+    evidence: dict[str, Any], target: dict[str, Any]
+) -> tuple[str | None, float | None, bool | None]:
     result = evidence.get("result")
     if not isinstance(result, dict):
-        return False
+        return None, None, False
+
+    native_bbox = target.get("native_bbox")
     lines = result.get("lines")
-    if not isinstance(lines, list) or not lines:
-        return False
-    for line in lines:
-        if not isinstance(line, dict):
-            continue
-        pdf_bbox = line.get("pdf_bbox")
-        if not isinstance(pdf_bbox, dict):
-            continue
-        candidate = [
-            pdf_bbox.get("x0"),
-            pdf_bbox.get("y0"),
-            pdf_bbox.get("x1"),
-            pdf_bbox.get("y1"),
-        ]
-        if any(value is None for value in candidate):
-            continue
-        if _rect_overlap_ratio(native_bbox, candidate) >= 0.2:
-            return True
-    return False
+    if isinstance(native_bbox, list) and len(native_bbox) == 4 and isinstance(lines, list):
+        best: tuple[float, str, float | None] | None = None
+        for line in lines:
+            if not isinstance(line, dict):
+                continue
+            pdf_bbox = _bbox_dict_values(line.get("pdf_bbox"))
+            text = line.get("text")
+            if pdf_bbox is None or not isinstance(text, str):
+                continue
+            overlap = _rect_overlap_ratio(native_bbox, pdf_bbox)
+            confidence = line.get("confidence")
+            item = (
+                overlap,
+                text,
+                float(confidence) if isinstance(confidence, int | float) else None,
+            )
+            if best is None or item[0] > best[0]:
+                best = item
+        if best is not None:
+            overlap, text, confidence = best
+            return text, confidence, overlap >= 0.2
+        return None, None, False
+
+    text = result.get("text")
+    confidence = result.get("confidence")
+    return (
+        str(text) if isinstance(text, str) else None,
+        float(confidence) if isinstance(confidence, int | float) else None,
+        None,
+    )
+
+
+def _normalized_agreement(native: str, ocr: str) -> str | None:
+    if native == ocr:
+        return "exact"
+    if len(native) >= 2 and native in ocr:
+        return "native_contained_in_ocr"
+    if len(ocr) >= 2 and ocr in native:
+        return "ocr_contained_in_native"
+    return None
 
 
 def _record_from_ocr(
@@ -118,7 +138,7 @@ def _record_from_ocr(
     kind = str(target.get("kind", "unknown"))
     native = target.get("native_candidate")
     native_text = str(native) if isinstance(native, str) else None
-    ocr_text, confidence = _ocr_text(evidence)
+    ocr_text, confidence, coordinate_match = _ocr_candidate(evidence, target)
     norm_native = normalize_for_comparison(native_text)
     norm_ocr = normalize_for_comparison(ocr_text)
     similarity = (
@@ -126,7 +146,7 @@ def _record_from_ocr(
         if norm_native and norm_ocr
         else None
     )
-    coordinate_match = _coordinate_match(evidence, target)
+    agreement = _normalized_agreement(norm_native, norm_ocr) if norm_native and norm_ocr else None
     execution_status = str(evidence.get("status", "unknown"))
 
     if execution_status != "completed":
@@ -136,11 +156,11 @@ def _record_from_ocr(
     elif (
         kind == "suspect_native_text"
         and norm_native
-        and norm_native == norm_ocr
+        and agreement is not None
         and coordinate_match is True
     ):
         status = ReviewStatus.AUTO_VERIFIED
-        reason = "normalized_native_ocr_exact_match_with_coordinate_overlap"
+        reason = f"normalized_{agreement}_with_coordinate_overlap"
         selected_source = "native"
     elif kind == "suspect_native_text":
         status = ReviewStatus.NEEDS_REVIEW
