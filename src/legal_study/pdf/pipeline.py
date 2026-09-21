@@ -20,6 +20,8 @@ from legal_study.pdf.ocr.base import (
 )
 from legal_study.pdf.ocr.routing import OcrRoutingConfig, routed_image_regions
 from legal_study.pdf.vector_marks import cluster_red_vector_evidence
+from legal_study.problem_packet import problem_markdown_filename, write_problem_packet
+from legal_study.reconciliation import ReconciliationResult, build_reconciliation
 from legal_study.run_manifest import PreparedRun, update_manifest_page_count
 from legal_study.source_store import SourceSnapshot, verify_snapshot
 from legal_study.state import RunStateMissingError, RunStateStore
@@ -107,8 +109,28 @@ class PdfIngestPipeline:
                 out,
                 upstream_hashes=[inspection_hash, crops_hash, ocr_hash],
             )
+            reconciliation, reconciliation_hash = self._reconciliation_step(
+                state,
+                prepared,
+                inspection,
+                out,
+                upstream_hashes=[inspection_hash, ocr_hash, review_hash],
+            )
+            packet_hash = self._problem_packet_step(
+                state,
+                prepared,
+                inspection,
+                reconciliation,
+                out,
+                upstream_hashes=[reconciliation_hash, review_hash],
+            )
             final_hash = self._hash_values(
-                inspection_hash, crops_hash, ocr_hash, review_hash
+                inspection_hash,
+                crops_hash,
+                ocr_hash,
+                review_hash,
+                reconciliation_hash,
+                packet_hash,
             )
             self._complete_final_step(state, prepared, final_hash)
             state.set_run_status(prepared.manifest.run_id, "COMPLETED")
@@ -166,6 +188,10 @@ class PdfIngestPipeline:
             fixed_files = [out / "ocr.json"]
         elif step_name == "REVIEW_MANIFEST_WRITTEN":
             fixed_files = [out / "review_manifest.json"]
+        elif step_name == "RECONCILIATION_WRITTEN":
+            fixed_files = [out / "reconciliation.json"]
+        elif step_name == "PROBLEM_PACKET_WRITTEN":
+            fixed_files = [out / "canonical_source.json", out / "problem_validation.json"]
         else:
             fixed_files = []
         for path in [*fixed_files, *generated_files]:
@@ -595,6 +621,108 @@ class PdfIngestPipeline:
                 ocr_targets=ocr_targets,
             )
             output_hash = file_sha256(artifact)
+            state.complete_step(
+                prepared.manifest.run_id, step_name, output_hash=output_hash
+            )
+            return output_hash
+        except Exception as exc:
+            self._fail(state, prepared, step_name, exc)
+            raise
+
+    def _reconciliation_step(
+        self,
+        state: RunStateStore,
+        prepared: PreparedRun,
+        inspection: DocumentInspection,
+        out: Path,
+        *,
+        upstream_hashes: list[str],
+    ) -> tuple[ReconciliationResult, str]:
+        step_name = "RECONCILIATION_WRITTEN"
+        artifact = out / "reconciliation.json"
+        input_hash = self._hash_values(
+            prepared.manifest.input_hash, step_name, *upstream_hashes
+        )
+        if artifact.is_file():
+            try:
+                result = ReconciliationResult.model_validate_json(
+                    artifact.read_text(encoding="utf-8")
+                )
+                if state.can_resume(
+                    prepared.manifest.run_id,
+                    step_name,
+                    input_hash=input_hash,
+                    version=_STEP_VERSION,
+                    output_hash=file_sha256(artifact),
+                ):
+                    return result, file_sha256(artifact)
+            except (OSError, ValueError):
+                pass
+
+        self._archive_step_artifacts(prepared.output_dir, step_name)
+        self._begin(state, prepared, step_name, input_hash)
+        try:
+            ocr_payload = json.loads((out / "ocr.json").read_text(encoding="utf-8"))
+            review_payload = json.loads(
+                (out / "review_manifest.json").read_text(encoding="utf-8")
+            )
+            result = build_reconciliation(inspection, ocr_payload, review_payload)
+            atomic_write_json(artifact, result.model_dump(mode="json"))
+            output_hash = file_sha256(artifact)
+            state.complete_step(
+                prepared.manifest.run_id, step_name, output_hash=output_hash
+            )
+            return result, output_hash
+        except Exception as exc:
+            self._fail(state, prepared, step_name, exc)
+            raise
+
+    def _problem_packet_step(
+        self,
+        state: RunStateStore,
+        prepared: PreparedRun,
+        inspection: DocumentInspection,
+        reconciliation: ReconciliationResult,
+        out: Path,
+        *,
+        upstream_hashes: list[str],
+    ) -> str:
+        step_name = "PROBLEM_PACKET_WRITTEN"
+        canonical_path = out / "canonical_source.json"
+        markdown_path = out / problem_markdown_filename(
+            prepared.manifest.subject, prepared.manifest.question
+        )
+        validation_path = out / "problem_validation.json"
+        input_hash = self._hash_values(
+            prepared.manifest.input_hash, step_name, *upstream_hashes
+        )
+        packet_paths = [canonical_path, markdown_path, validation_path]
+        if all(path.is_file() for path in packet_paths):
+            output_hash = self._hash_values(*(file_sha256(path) for path in packet_paths))
+            if state.can_resume(
+                prepared.manifest.run_id,
+                step_name,
+                input_hash=input_hash,
+                version=_STEP_VERSION,
+                output_hash=output_hash,
+            ):
+                return output_hash
+
+        for path in packet_paths:
+            self._archive_file(out, step_name, path)
+        self._begin(state, prepared, step_name, input_hash)
+        try:
+            ocr_payload = json.loads((out / "ocr.json").read_text(encoding="utf-8"))
+            write_problem_packet(
+                run_dir=out,
+                manifest=prepared.manifest,
+                inspection=inspection,
+                reconciliation=reconciliation,
+                ocr_payload=ocr_payload,
+            )
+            output_hash = self._hash_values(
+                *(file_sha256(path) for path in packet_paths)
+            )
             state.complete_step(
                 prepared.manifest.run_id, step_name, output_hash=output_hash
             )
