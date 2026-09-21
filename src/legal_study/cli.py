@@ -12,7 +12,12 @@ from rich.table import Table
 
 from legal_study.io_utils import atomic_write_text
 from legal_study.pdf.inspector import PdfInspector
-from legal_study.pdf.ocr.paddle import PaddleOcrEngine
+from legal_study.pdf.ocr.paddle import (
+    PaddleOcrEngine,
+    inspect_paddle_installation,
+    warmup_paddle_models,
+)
+from legal_study.pdf.ocr.routing import OcrRoutingConfig
 from legal_study.pdf.pipeline import PdfIngestPipeline
 from legal_study.run_manifest import prepare_run
 from legal_study.settings import LocalSettings
@@ -49,7 +54,12 @@ def init() -> None:
 
 
 @app.command()
-def doctor() -> None:
+def doctor(
+    ocr: Annotated[
+        bool,
+        typer.Option("--ocr", help="Verify offline Paddle packages, models, and hashes."),
+    ] = False,
+) -> None:
     """Check whether the core local-only PDF pipeline can run."""
     settings = LocalSettings()
     settings.ensure()
@@ -71,6 +81,28 @@ def doctor() -> None:
         "Core inspect/ingest works locally without cloud services. "
         "PaddleOCR is optional and may require a separate Paddle runtime."
     )
+    if ocr:
+        status = inspect_paddle_installation(settings.models_dir / "paddleocr")
+        console.print_json(data=status)
+        if status["ready"]:
+            console.print("Offline PaddleOCR: READY (CPU)")
+        else:
+            console.print(
+                "Offline PaddleOCR: NOT READY. Install the OCR extra and run "
+                "`legal-study warmup-ocr` once while online."
+            )
+
+
+@app.command("warmup-ocr")
+def warmup_ocr() -> None:
+    """Explicitly download and hash PaddleOCR models for later offline CPU use."""
+    settings = LocalSettings()
+    settings.ensure()
+    console.print("Preparing PaddleOCR CPU models; this command may use the network...")
+    status = warmup_paddle_models(settings.models_dir / "paddleocr")
+    console.print_json(data=status)
+    if not status["ready"]:
+        raise typer.Exit(code=1)
 
 
 @app.command()
@@ -117,19 +149,40 @@ def ingest(
     ] = None,
     pages: Annotated[str | None, typer.Option(help="1-based pages, e.g. 110-116")] = None,
     ocr: Annotated[str, typer.Option(help="none|paddle")] = "none",
+    full_page_dpi: Annotated[
+        int, typer.Option(help="Full-page OCR render DPI: 300, 450, or 600.")
+    ] = 300,
+    image_region_dpi: Annotated[
+        int, typer.Option(help="Embedded-image OCR crop DPI: 300, 450, or 600.")
+    ] = 300,
+    surgical_dpi: Annotated[
+        int, typer.Option(help="Surgical OCR crop DPI: 300, 450, or 600.")
+    ] = 450,
     subject: Annotated[str, typer.Option(help="Used for default run directory")] = "unknown",
     question: Annotated[str, typer.Option(help="Used for default run directory")] = "adhoc",
 ) -> None:
     parsed_pages = _parse_pages(pages)
     settings = LocalSettings()
     snapshot = snapshot_source(pdf, settings=settings)
+    try:
+        routing = OcrRoutingConfig(
+            full_page_dpi=full_page_dpi,
+            image_region_dpi=image_region_dpi,
+            surgical_dpi=surgical_dpi,
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
     engine = None
     if ocr == "paddle":
-        engine = PaddleOcrEngine()
+        engine = PaddleOcrEngine(model_root=settings.models_dir / "paddleocr")
     elif ocr != "none":
         raise typer.BadParameter("ocr must be 'none' or 'paddle'")
 
-    pipeline = PdfIngestPipeline(ocr_engine=engine)
+    pipeline = PdfIngestPipeline(
+        inspector=PdfInspector(render_dpi=full_page_dpi),
+        ocr_engine=engine,
+        routing_config=routing,
+    )
     prepared = prepare_run(
         snapshot=snapshot,
         subject=subject,
