@@ -7,29 +7,62 @@ from legal_study.models import BBox, DocumentInspection
 from legal_study.pdf.inspector import PdfInspector
 from legal_study.pdf.ocr.base import OcrEngine
 from legal_study.pdf.vector_marks import cluster_red_pen_marks
+from legal_study.source_store import SourceSnapshot, verify_snapshot
 
 
 class PdfIngestPipeline:
     """Evidence-first PDF ingest with selective / surgical OCR targets."""
 
-    def __init__(self, inspector: PdfInspector | None = None, ocr_engine: OcrEngine | None = None):
+    def __init__(
+        self,
+        inspector: PdfInspector | None = None,
+        ocr_engine: OcrEngine | None = None,
+        *,
+        review_crop_dpi: int = 450,
+        ocr_crop_dpi: int = 450,
+    ):
         self.inspector = inspector or PdfInspector()
         self.ocr_engine = ocr_engine
+        self.review_crop_dpi = review_crop_dpi
+        self.ocr_crop_dpi = ocr_crop_dpi
+
+    def input_config(self) -> dict[str, object]:
+        return {
+            "pipeline_version": "1",
+            "min_native_chars": self.inspector.min_native_chars,
+            "min_native_quality": self.inspector.min_native_quality,
+            "render_dpi": self.inspector.render_dpi,
+            "review_crop_dpi": self.review_crop_dpi,
+            "ocr_crop_dpi": self.ocr_crop_dpi,
+            "ocr_engine": self.ocr_engine.name if self.ocr_engine is not None else "none",
+        }
 
     def run(
         self,
-        source: str | Path,
+        source: SourceSnapshot,
         output_dir: str | Path,
         *,
         pages: list[int] | None = None,
     ) -> DocumentInspection:
+        verify_snapshot(source)
+        snapshot_path = source.snapshot_path
         out = Path(output_dir).resolve()
         render_dir = out / "renders"
         out.mkdir(parents=True, exist_ok=True)
 
-        inspection = self.inspector.inspect(source, pages=pages, render_dir=render_dir)
-        review_crops = self._render_review_crops(source, inspection, out / "review_crops")
-        ocr_targets = self._render_ocr_targets(source, inspection, out / "ocr_crops")
+        inspection = self.inspector.inspect(snapshot_path, pages=pages, render_dir=render_dir)
+        review_crops = self._render_review_crops(
+            snapshot_path,
+            inspection,
+            out / "review_crops",
+            dpi=self.review_crop_dpi,
+        )
+        ocr_targets = self._render_ocr_targets(
+            snapshot_path,
+            inspection,
+            out / "ocr_crops",
+            dpi=self.ocr_crop_dpi,
+        )
 
         ocr_results: dict[str, object] = {"pages": {}}
         if self.ocr_engine is not None:

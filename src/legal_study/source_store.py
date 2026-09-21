@@ -30,6 +30,19 @@ class SourceSnapshot(BaseModel):
     snapshot_created_at: datetime
 
 
+def verify_snapshot(snapshot: SourceSnapshot) -> None:
+    if not snapshot.snapshot_path.is_file():
+        raise SourceStoreCorruptionError(f"Stored source is missing: {snapshot.snapshot_path}")
+    if snapshot.snapshot_path.stat().st_size != snapshot.source_size:
+        raise SourceStoreCorruptionError(
+            f"Stored source size does not match its manifest: {snapshot.snapshot_path}"
+        )
+    if source_fingerprint(snapshot.snapshot_path) != snapshot.sha256:
+        raise SourceStoreCorruptionError(
+            f"Stored source content does not match its manifest: {snapshot.snapshot_path}"
+        )
+
+
 def snapshot_source(
     source: str | Path, *, settings: LocalSettings | None = None
 ) -> SourceSnapshot:

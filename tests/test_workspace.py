@@ -2,19 +2,29 @@ from pathlib import Path
 
 from legal_study.settings import LocalSettings
 from legal_study.source_store import snapshot_source
-from legal_study.workspace import run_dir
+from legal_study.workspace import run_dir, safe_path_component
 
 
 def test_portable_workspace_uses_configured_home(tmp_path: Path) -> None:
-    source = tmp_path / "source.pdf"
-    source.write_bytes(b"test-pdf-placeholder")
     settings = LocalSettings(home=tmp_path / "home")
 
-    path = run_dir(subject="criminal", question="15", source=source, settings=settings)
+    path = run_dir(
+        subject="criminal",
+        question="15",
+        source_sha256="a" * 64,
+        input_hash="b" * 64,
+        settings=settings,
+    )
 
     assert path.parent == settings.runs_dir / "criminal"
     assert path.name.startswith("15-")
     assert path.exists()
+
+
+def test_safe_path_component_blocks_parent_and_windows_reserved_names() -> None:
+    assert safe_path_component("..", fallback="unknown") == "unknown"
+    assert safe_path_component("CON", fallback="unknown") == "_CON"
+    assert safe_path_component('criminal:/\\*?"<>|', fallback="unknown") == "criminal---------"
 
 
 def test_source_snapshot_is_content_addressed_and_immutable(tmp_path: Path) -> None:

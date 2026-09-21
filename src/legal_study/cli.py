@@ -13,8 +13,9 @@ from rich.table import Table
 from legal_study.pdf.inspector import PdfInspector
 from legal_study.pdf.ocr.paddle import PaddleOcrEngine
 from legal_study.pdf.pipeline import PdfIngestPipeline
+from legal_study.run_manifest import prepare_run, update_manifest_page_count
 from legal_study.settings import LocalSettings
-from legal_study.workspace import run_dir
+from legal_study.source_store import snapshot_source
 
 app = typer.Typer(no_args_is_help=True)
 console = Console()
@@ -78,7 +79,11 @@ def inspect(
     render_dir: Annotated[Path | None, typer.Option()] = None,
     json_output: Annotated[Path | None, typer.Option()] = None,
 ) -> None:
-    result = PdfInspector().inspect(pdf, pages=_parse_pages(pages), render_dir=render_dir)
+    settings = LocalSettings()
+    snapshot = snapshot_source(pdf, settings=settings)
+    result = PdfInspector().inspect(
+        snapshot.snapshot_path, pages=_parse_pages(pages), render_dir=render_dir
+    )
     if json_output:
         json_output.write_text(result.model_dump_json(indent=2), encoding="utf-8")
 
@@ -114,22 +119,33 @@ def ingest(
     subject: Annotated[str, typer.Option(help="Used for default run directory")] = "unknown",
     question: Annotated[str, typer.Option(help="Used for default run directory")] = "adhoc",
 ) -> None:
+    parsed_pages = _parse_pages(pages)
+    settings = LocalSettings()
+    snapshot = snapshot_source(pdf, settings=settings)
     engine = None
     if ocr == "paddle":
         engine = PaddleOcrEngine()
     elif ocr != "none":
         raise typer.BadParameter("ocr must be 'none' or 'paddle'")
 
-    resolved_output = output_dir or run_dir(
-        subject=subject, question=question, source=pdf.resolve()
+    pipeline = PdfIngestPipeline(ocr_engine=engine)
+    prepared = prepare_run(
+        snapshot=snapshot,
+        subject=subject,
+        question=question,
+        pages=parsed_pages,
+        pipeline_config=pipeline.input_config(),
+        output_dir=output_dir,
+        settings=settings,
     )
-    result = PdfIngestPipeline(ocr_engine=engine).run(
-        pdf, resolved_output, pages=_parse_pages(pages)
-    )
+    result = pipeline.run(snapshot, prepared.output_dir, pages=parsed_pages)
+    prepared = update_manifest_page_count(prepared, result.page_count)
     console.print(
         json.dumps(
             {
-                "output_dir": str(resolved_output),
+                "run_id": prepared.manifest.run_id,
+                "output_dir": str(prepared.output_dir),
+                "source_sha256": snapshot.sha256,
                 "pages": len(result.pages),
                 "ocr_recommended": [p.page_number for p in result.pages if p.ocr_recommended],
                 "vision_review": [
