@@ -70,13 +70,22 @@ def finalize_existing_run(
         out,
         upstream_hashes=[inspection_hash, ocr_hash, review_hash],
     )
-    packet_hash = pipeline._problem_packet_step(
+    repair, repair_hash = pipeline._repair_step(
         state,
         prepared,
         inspection,
         reconciliation,
         out,
-        upstream_hashes=[reconciliation_hash, review_hash],
+        upstream_hashes=[reconciliation_hash, ocr_hash],
+    )
+    packet_hash = pipeline._problem_packet_step(
+        state,
+        prepared,
+        inspection,
+        reconciliation,
+        repair,
+        out,
+        upstream_hashes=[reconciliation_hash, repair_hash, review_hash],
     )
     state.set_run_status(manifest.run_id, "COMPLETED")
 
@@ -92,6 +101,7 @@ def finalize_existing_run(
         "run_id": manifest.run_id,
         "output_dir": str(out),
         "reconciliation": reconciliation.counts,
+        "repair": repair.counts,
         "problem_markdown": markdown_files[0].name,
         "canonical_source": "canonical_source.json",
         "problem_validation": validation,
