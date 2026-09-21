@@ -44,9 +44,11 @@ PDF
           ↓
    full-page / image-region / surgical OCR only when needed
           ↓
-  Vision review manifest
+  reconciliation / needs_review
           ↓
- later: reconciliation → canonical source → problem Markdown
+  canonical_source.json
+          ↓
+  <subject>_<question>_problem.md
 ```
 
 特に現在の教材PDFでは、PDF Annotation が0件でも、黄色・青・橙のマーカーや赤ペンが **vector drawing** として残っているページがあります。v0.1はこれを直接検出し、太い半透明ストロークとPDF本文のword boxを交差させて「マーカー候補原文」を取り出します。赤い細線は意味を推測せず、後段Vision確認用の証拠として保持します。
@@ -92,6 +94,10 @@ legal-study ingest ".\materials\論文マスター_刑法.pdf" --subject crimina
 - `evidence_crops.json`
 - `review_manifest.json`
 - `ocr.json`
+- `reconciliation.json`
+- `canonical_source.json`
+- `<subject>_<question>_problem.md`
+- `problem_validation.json`
 - `renders/page-XXXX.png`
 - `ocr_crops/`（壊れたUnicode mappingのsurgical cropと、独立判定した画像領域）
 - `review_crops/`（赤色vector evidenceをクラスタ化したVision確認用crop）
@@ -128,12 +134,10 @@ v0.1ではPaddleOCR 3.7系、PaddlePaddle 3.2系、50言語対応の`PP-OCRv6` m
 - copyrighted PDFそのものや生成renderはGit管理しない。
 - コアPDF処理にクラウド接続を必須としない。
 
-## 次の実装
+## P1-C
 
-1. native text / PaddleOCR / Vision evidenceの差分照合
-2. `needs_review`と必要最小限のevidence PNGの生成
-3. マーカー開始文字・終了文字の厳密確定
-4. `canonical_source.json` の生成
-5. `<subject>_<question>_problem.md` の生成
+P1-Cではnative/OCR evidenceを保守的に照合し、`AUTO_VERIFIED / NEEDS_REVIEW / UNRESOLVED`を分離します。比較用のUnicode/空白正規化は原文とは別フィールドで保持し、OCRがnative textを書き換えることはありません。
+
+生成された`problem.md`はChatGPT Projectへ渡す主要成果物です。視覚判断が必要な赤vector、OCR-only画像、境界未確定marker等は`Needs Review`へ残し、run-relativeなevidence参照を保持します。
 
 最終調整はローカルCodexで行いやすいよう、各処理を独立モジュールに分割してあります。
