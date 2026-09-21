@@ -23,49 +23,18 @@ def _bbox_values(box: BBox) -> list[float]:
 
 
 def _iter_native_chars(page: PageInspection) -> list[dict[str, Any]]:
-    chars: list[dict[str, Any]] = []
-    global_index = 0
-    blocks = page.raw_native.get("blocks", [])
-    if not isinstance(blocks, list):
-        return chars
-    for block_index, block in enumerate(blocks):
-        if not isinstance(block, dict):
-            continue
-        lines = block.get("lines", [])
-        if not isinstance(lines, list):
-            continue
-        for line_index, line in enumerate(lines):
-            if not isinstance(line, dict):
-                continue
-            spans = line.get("spans", [])
-            if not isinstance(spans, list):
-                continue
-            for span_index, span in enumerate(spans):
-                if not isinstance(span, dict):
-                    continue
-                span_chars = span.get("chars", [])
-                if not isinstance(span_chars, list):
-                    continue
-                for char_index, char in enumerate(span_chars):
-                    if not isinstance(char, dict):
-                        continue
-                    value = char.get("c")
-                    bbox = char.get("bbox")
-                    if not isinstance(value, str) or not isinstance(bbox, list) or len(bbox) != 4:
-                        continue
-                    chars.append(
-                        {
-                            "index": global_index,
-                            "char": value,
-                            "bbox": [float(item) for item in bbox],
-                            "block": block_index,
-                            "line": line_index,
-                            "span": span_index,
-                            "char_in_span": char_index,
-                        }
-                    )
-                    global_index += 1
-    return chars
+    return [
+        {
+            "index": item.index,
+            "char": item.char,
+            "bbox": _bbox_values(item.bbox),
+            "block": item.block,
+            "line": item.line,
+            "span": item.span,
+            "char_in_span": item.char_in_span,
+        }
+        for item in page.native_chars
+    ]
 
 
 def _intersects_marker(char_bbox: list[float], mark: VectorMark) -> bool:
