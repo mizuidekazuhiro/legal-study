@@ -70,3 +70,11 @@ def suspicious_token_count(text: str) -> int:
         for match in _LOWER_LATIN_TOKEN_RE.finditer(text)
         if match.group(0).lower() not in _EXPECTED_LOWER_TOKENS
     )
+
+
+def japanese_char_ratio(text: str) -> float:
+    chars = [char for char in text if not char.isspace()]
+    if not chars:
+        return 0.0
+    japanese = sum(1 for char in chars if _JP_RE.match(char))
+    return japanese / len(chars)
