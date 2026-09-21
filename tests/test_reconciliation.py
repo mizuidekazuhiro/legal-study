@@ -42,10 +42,21 @@ def _evidence(kind: str, native: str | None, ocr: str, status: str = "completed"
     }
     if native is not None:
         target["native_candidate"] = native
+        target["native_bbox"] = [12, 22, 48, 38]
     return {
         "status": status,
         "target": target,
-        "result": {"text": ocr, "confidence": 0.95},
+        "result": {
+            "text": ocr,
+            "confidence": 0.95,
+            "lines": [
+                {
+                    "text": ocr,
+                    "confidence": 0.95,
+                    "pdf_bbox": {"x0": 12, "y0": 22, "x1": 48, "y1": 38},
+                }
+            ],
+        },
     }
 
 
@@ -69,6 +80,7 @@ def test_surgical_exact_after_normalization_is_auto_verified() -> None:
     assert record.native_original == "Ａ  B"
     assert record.ocr_original == "A B"
     assert record.status == ReviewStatus.AUTO_VERIFIED
+    assert record.coordinate_match is True
     assert record.selected_source == "native"
 
 
@@ -133,4 +145,20 @@ def test_red_review_crop_is_never_auto_interpreted() -> None:
     result = build_reconciliation(_inspection(), {"pages": {}}, review)
 
     assert result.records[0].source_kind == "red_vector_cluster"
+    assert result.records[0].status == ReviewStatus.NEEDS_REVIEW
+
+
+def test_exact_text_with_coordinate_mismatch_requires_review() -> None:
+    evidence = _evidence("suspect_native_text", "甲", "甲")
+    evidence["result"]["lines"][0]["pdf_bbox"] = {
+        "x0": 100,
+        "y0": 100,
+        "x1": 120,
+        "y1": 120,
+    }
+    ocr = {"pages": {"1": {"regions": [evidence]}}}
+
+    result = build_reconciliation(_inspection(), ocr, {"pages": []})
+
+    assert result.records[0].coordinate_match is False
     assert result.records[0].status == ReviewStatus.NEEDS_REVIEW
