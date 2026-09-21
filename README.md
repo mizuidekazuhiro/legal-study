@@ -4,6 +4,12 @@
 
 現在の v0.1 は、最も事故が起きやすい **PDF読込レイヤ** を先に実装しています。単純に全ページOCRを掛けるのではなく、ページごとに最も信頼できる情報源を使い分けます。
 
+## ローカルファースト
+
+外出先のPCでも動かせるよう、コア処理は Google Drive / Notion / Obsidian / 固定ドライブ文字に依存しません。PDFがローカルにあれば、検査・レンダリング・vector mark検出・OCR対象抽出・ローカル保存まで単体で動作する設計です。
+
+可変データは標準で `~/.legal-study/` 配下に置きます。別の場所を使う場合は `LEGAL_STUDY_HOME` を設定してください。詳細は [`docs/local-first.md`](docs/local-first.md) を参照してください。
+
 ## v0.1 の方針
 
 ```text
@@ -32,11 +38,12 @@ PDF
 
 ## セットアップ
 
+Windowsでは以下で初期化できます。
+
 ```powershell
-py -3.12 -m venv .venv
-.venv\Scripts\Activate.ps1
-python -m pip install -U pip
-pip install -e .[dev]
+.\scripts\bootstrap.ps1
+.\.venv\Scripts\legal-study.exe init
+.\.venv\Scripts\legal-study.exe doctor
 ```
 
 PDFの構造だけ調べる場合、OCRモデルは不要です。
@@ -44,15 +51,17 @@ PDFの構造だけ調べる場合、OCRモデルは不要です。
 ## PDFを検査する
 
 ```powershell
-legal-study inspect "G:\path\論文マスター_刑法.pdf" --pages 110-116 --render-dir artifacts\刑法12
+legal-study inspect ".\materials\論文マスター_刑法.pdf" --pages 110-116 --render-dir .\artifacts\刑法12
 ```
 
 ページごとに `native / hybrid / ocr_required`、文字数、テキスト品質、画像占有率、検出vector mark数、OCR推奨、Vision確認推奨を表示します。
 
 ## ingest artifactを作る
 
+出力先を省略すると、PDFのSHA-256を含むローカルrunディレクトリを自動作成します。
+
 ```powershell
-legal-study ingest "G:\path\論文マスター_刑法.pdf" -o runs\criminal-12 --pages 110-116
+legal-study ingest ".\materials\論文マスター_刑法.pdf" --subject criminal --question 12 --pages 110-116
 ```
 
 出力:
@@ -66,11 +75,11 @@ legal-study ingest "G:\path\論文マスター_刑法.pdf" -o runs\criminal-12 -
 
 ## PaddleOCRを追加する
 
-PaddleOCR本体に加えて、使用環境に合うPaddle inference runtimeが必要です。
+PaddleOCR本体に加えて、使用環境に合うPaddle inference runtimeが必要です。外出先でオフライン利用する場合は、出発前にモデルを一度取得してローカルキャッシュを準備します。
 
 ```powershell
 pip install -e .[ocr]
-legal-study ingest "G:\path\source.pdf" -o runs\sample --pages 1-5 --ocr paddle
+legal-study ingest ".\materials\source.pdf" --subject criminal --question sample --pages 1-5 --ocr paddle
 ```
 
 v0.1ではPaddleOCRは `PP-OCRv6` / `lang="japan"` を明示して使います。モデルの自動更新で認識挙動が変わらないよう、後続版でモデル名・runtime versionもrun manifestへ固定します。
@@ -84,6 +93,7 @@ v0.1ではPaddleOCRは `PP-OCRv6` / `lang="japan"` を明示して使います�
 - 赤ペンを「修正」と決め打ちしない。
 - Vision確認が必要なページを明示的に残す。
 - copyrighted PDFそのものや生成renderはGit管理しない。
+- コアPDF処理にクラウド接続を必須としない。
 
 ## 次の実装
 
@@ -93,3 +103,5 @@ v0.1ではPaddleOCRは `PP-OCRv6` / `lang="japan"` を明示して使います�
 4. SQLiteによるrun state / resume
 5. 刑法Anki/Obsidian generator
 6. Google Drive Inbox / Notion connector
+
+最終調整はローカルCodexで行いやすいよう、各処理を独立モジュールに分割してあります。
