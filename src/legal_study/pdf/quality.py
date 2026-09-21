@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 import unicodedata
 
-_JP_RE = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff]")
+_JP_RE = re.compile(r"[\u3005-\u3007\u303b\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff]")
 
 
 def _is_expected_letter_or_number(c: str) -> bool:
