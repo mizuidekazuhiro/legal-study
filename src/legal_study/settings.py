@@ -21,6 +21,10 @@ class LocalSettings(BaseModel):
         return self.home / "runs"
 
     @property
+    def sources_dir(self) -> Path:
+        return self.home / "sources" / "sha256"
+
+    @property
     def cache_dir(self) -> Path:
         return self.home / "cache"
 
@@ -37,5 +41,12 @@ class LocalSettings(BaseModel):
         return self.home / "state.sqlite3"
 
     def ensure(self) -> None:
-        for path in (self.home, self.runs_dir, self.cache_dir, self.models_dir, self.temp_dir):
+        for path in (
+            self.home,
+            self.runs_dir,
+            self.sources_dir,
+            self.cache_dir,
+            self.models_dir,
+            self.temp_dir,
+        ):
             path.mkdir(parents=True, exist_ok=True)
