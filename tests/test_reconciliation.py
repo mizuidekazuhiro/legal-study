@@ -172,3 +172,18 @@ def test_surgical_native_contained_in_ocr_can_auto_verify_with_geometry() -> Non
 
     assert result.records[0].status == ReviewStatus.AUTO_VERIFIED
     assert result.records[0].reason.startswith("normalized_native_contained_in_ocr")
+
+
+def test_surgical_context_match_ignores_nfkc_whitespace_with_geometry() -> None:
+    evidence = _evidence(
+        "suspect_native_text",
+        "⑶ また、甲に、",
+        "(3)また、甲に、故",
+    )
+    ocr = {"pages": {"1": {"regions": [evidence]}}}
+
+    result = build_reconciliation(_inspection(), ocr, {"pages": []})
+
+    assert result.records[0].status == ReviewStatus.AUTO_VERIFIED
+    assert result.records[0].selected_source == "native"
+    assert "ignoring_whitespace" in result.records[0].reason

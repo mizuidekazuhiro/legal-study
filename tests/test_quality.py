@@ -17,3 +17,7 @@ def test_japanese_iteration_and_closing_marks_are_not_suspicious() -> None:
 
     assert native_text_quality(text) > 0.9
     assert all(not is_suspicious_char(character) for character in "々〆〇〻")
+
+
+def test_japanese_list_numbers_are_not_suspicious() -> None:
+    assert all(not is_suspicious_char(character) for character in "⑴⑵⑶①②③")

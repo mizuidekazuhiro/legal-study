@@ -49,6 +49,10 @@ def normalize_for_comparison(text: str | None) -> str:
     return re.sub(r"\s+", " ", normalized).strip()
 
 
+def _compact_for_comparison(text: str) -> str:
+    return re.sub(r"\s+", "", text)
+
+
 def _bbox_from_target(target: dict[str, Any]) -> BBox:
     values = target.get("bbox")
     if not isinstance(values, list) or len(values) != 4:
@@ -142,6 +146,14 @@ def _normalized_agreement(native: str, ocr: str) -> str | None:
         return "native_contained_in_ocr"
     if len(ocr) >= 2 and ocr in native:
         return "ocr_contained_in_native"
+    compact_native = _compact_for_comparison(native)
+    compact_ocr = _compact_for_comparison(ocr)
+    if compact_native == compact_ocr:
+        return "exact_ignoring_whitespace"
+    if len(compact_native) >= 2 and compact_native in compact_ocr:
+        return "native_contained_in_ocr_ignoring_whitespace"
+    if len(compact_ocr) >= 2 and compact_ocr in compact_native:
+        return "ocr_contained_in_native_ignoring_whitespace"
     return None
 
 

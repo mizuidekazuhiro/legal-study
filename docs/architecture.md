@@ -118,6 +118,11 @@ The planned terminal local artifact is `<subject>_<question>_problem.md`, genera
 `canonical_source.json`. Verified text is included in full. Ambiguous content remains
 `needs_review` with page, bbox, crop image, native candidate, OCR candidate, reason, and
 confidence. Only regions that require visual confirmation are attached as PNG evidence.
+Raw marker fragments remain in `markers`. The ChatGPT-facing `logical_markers` layer only
+combines same-color fragments when their paint bands overlap and native character geometry
+proves overlap or adjacency without an unmarked character gap. Every logical marker keeps
+its constituent marker IDs and raw vector IDs. Surgical OCR remains reconciliation evidence;
+only full-page and image-region OCR can appear in OCR Supplements.
 
 Anki, Obsidian, Notion, and Google Drive automation are intentionally outside the
 current scope. The packet is designed for manual upload to a ChatGPT Project.

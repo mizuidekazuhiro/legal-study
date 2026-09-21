@@ -108,6 +108,8 @@ def _marker_record(page: PageInspection, mark: VectorMark, index: int) -> dict[s
         "page_number": page.page_number,
         "drawing_index": mark.drawing_index,
         "paint": mark.paint,
+        "width": mark.width,
+        "opacity": mark.opacity,
         "color": mark.color_name,
         "bbox": _bbox_values(mark.rect),
         "exact_text": exact_text,
@@ -125,6 +127,179 @@ def _marker_record(page: PageInspection, mark: VectorMark, index: int) -> dict[s
         "raw_vector_ids": [mark.drawing_index],
         "evidence_image": page.rendered_image if status != ReviewStatus.AUTO_VERIFIED else None,
     }
+
+
+def _marker_paint_band(marker: dict[str, Any]) -> tuple[float, float]:
+    x0, y0, x1, y1 = (float(value) for value in marker["bbox"])
+    del x0, x1
+    if marker.get("paint") == "stroke":
+        center = (y0 + y1) / 2
+        half_width = max(float(marker.get("width") or 0.0) / 2, 0.5)
+        return center - half_width, center + half_width
+    return y0, y1
+
+
+def _marker_char_indexes(marker: dict[str, Any]) -> set[int]:
+    return {
+        int(char["index"])
+        for char in marker.get("native_chars", [])
+        if isinstance(char, dict) and isinstance(char.get("index"), int)
+    }
+
+
+def _marker_lines(marker: dict[str, Any]) -> set[tuple[int, int]]:
+    return {
+        (int(char["block"]), int(char["line"]))
+        for char in marker.get("native_chars", [])
+        if isinstance(char, dict)
+        and isinstance(char.get("block"), int)
+        and isinstance(char.get("line"), int)
+    }
+
+
+def _can_merge_marker_fragments(a: dict[str, Any], b: dict[str, Any]) -> bool:
+    if a.get("page_number") != b.get("page_number") or a.get("color") != b.get("color"):
+        return False
+    if not (_marker_lines(a) & _marker_lines(b)):
+        return False
+    a_band = _marker_paint_band(a)
+    b_band = _marker_paint_band(b)
+    if min(a_band[1], b_band[1]) < max(a_band[0], b_band[0]):
+        return False
+
+    a_indexes = _marker_char_indexes(a)
+    b_indexes = _marker_char_indexes(b)
+    if not a_indexes or not b_indexes:
+        return False
+    if a_indexes & b_indexes:
+        return True
+
+    a_box = [float(value) for value in a["bbox"]]
+    b_box = [float(value) for value in b["bbox"]]
+    if a_box[2] <= b_box[0]:
+        return max(a_indexes) + 1 == min(b_indexes)
+    if b_box[2] <= a_box[0]:
+        return max(b_indexes) + 1 == min(a_indexes)
+    return False
+
+
+def build_logical_markers(markers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Aggregate only provably contiguous fragments while retaining raw provenance."""
+    parents = list(range(len(markers)))
+
+    def find(index: int) -> int:
+        while parents[index] != index:
+            parents[index] = parents[parents[index]]
+            index = parents[index]
+        return index
+
+    def union(left: int, right: int) -> None:
+        left_root = find(left)
+        right_root = find(right)
+        if left_root != right_root:
+            parents[right_root] = left_root
+
+    for left, marker in enumerate(markers):
+        for right in range(left + 1, len(markers)):
+            if _can_merge_marker_fragments(marker, markers[right]):
+                union(left, right)
+
+    components: dict[int, list[dict[str, Any]]] = {}
+    for index, marker in enumerate(markers):
+        components.setdefault(find(index), []).append(marker)
+
+    logical: list[dict[str, Any]] = []
+    page_counts: dict[int, int] = {}
+    for fragments in components.values():
+        page_number = int(fragments[0]["page_number"])
+        page_counts[page_number] = page_counts.get(page_number, 0) + 1
+        native_chars_by_index: dict[int, dict[str, Any]] = {}
+        for fragment in fragments:
+            for char in fragment.get("native_chars", []):
+                if isinstance(char, dict) and isinstance(char.get("index"), int):
+                    native_chars_by_index.setdefault(int(char["index"]), char)
+        native_chars = [native_chars_by_index[key] for key in sorted(native_chars_by_index)]
+        bboxes = [[float(value) for value in fragment["bbox"]] for fragment in fragments]
+        union_bbox = [
+            min(box[0] for box in bboxes),
+            min(box[1] for box in bboxes),
+            max(box[2] for box in bboxes),
+            max(box[3] for box in bboxes),
+        ]
+        statuses = {str(fragment["review_status"]) for fragment in fragments}
+        status = (
+            ReviewStatus.AUTO_VERIFIED.value
+            if statuses == {ReviewStatus.AUTO_VERIFIED.value}
+            else ReviewStatus.NEEDS_REVIEW.value
+        )
+        candidates = list(
+            dict.fromkeys(
+                str(fragment["word_candidate"])
+                for fragment in fragments
+                if fragment.get("word_candidate")
+            )
+        )
+        raw_vector_ids = sorted(
+            {
+                int(raw_id)
+                for fragment in fragments
+                for raw_id in fragment.get("raw_vector_ids", [])
+            }
+        )
+        logical.append(
+            {
+                "id": f"p{page_number:04d}-logical-mark-{page_counts[page_number]:03d}",
+                "page_number": page_number,
+                "paint": fragments[0]["paint"],
+                "color": fragments[0]["color"],
+                "bbox": union_bbox,
+                "bbox_list": bboxes,
+                "exact_text": "".join(str(char["char"]) for char in native_chars) or None,
+                "word_candidates": candidates,
+                "start_char": native_chars[0]["index"] if native_chars else None,
+                "end_char": native_chars[-1]["index"] if native_chars else None,
+                "native_chars": native_chars,
+                "boundary_confidence": min(
+                    float(fragment["boundary_confidence"]) for fragment in fragments
+                ),
+                "review_status": status,
+                "reason": (
+                    "all_fragment_boundaries_auto_verified"
+                    if status == ReviewStatus.AUTO_VERIFIED.value
+                    else "logical_marker_boundary_requires_review"
+                ),
+                "constituent_marker_ids": [str(fragment["id"]) for fragment in fragments],
+                "raw_vector_ids": raw_vector_ids,
+                "evidence_image": next(
+                    (
+                        str(fragment["evidence_image"])
+                        for fragment in fragments
+                        if fragment.get("evidence_image")
+                    ),
+                    None,
+                ),
+            }
+        )
+    return logical
+
+
+def build_ocr_supplements(
+    reconciliation: ReconciliationResult,
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "id": record.id,
+            "page_number": record.page_number,
+            "source_kind": record.source_kind,
+            "bbox": _bbox_values(record.bbox),
+            "text": record.ocr_original,
+            "confidence": record.ocr_confidence,
+            "status": record.status.value,
+            "evidence_image": record.evidence_image,
+        }
+        for record in reconciliation.records
+        if record.ocr_original and record.source_kind in {"image_region", "full_page"}
+    ]
 
 
 def build_canonical_source(
@@ -160,6 +335,7 @@ def build_canonical_source(
                 "rendered_image": page.rendered_image,
             }
         )
+    logical_markers = build_logical_markers(markers)
 
     reconciliation_records = [
         record.model_dump(mode="json") for record in reconciliation.records
@@ -191,24 +367,10 @@ def build_canonical_source(
             "evidence_image": marker["evidence_image"],
             "status": marker["review_status"],
         }
-        for marker in markers
+        for marker in logical_markers
         if marker["review_status"] != ReviewStatus.AUTO_VERIFIED.value
     )
-
-    ocr_supplements = [
-        {
-            "id": record.id,
-            "page_number": record.page_number,
-            "source_kind": record.source_kind,
-            "bbox": _bbox_values(record.bbox),
-            "text": record.ocr_original,
-            "confidence": record.ocr_confidence,
-            "status": record.status.value,
-            "evidence_image": record.evidence_image,
-        }
-        for record in reconciliation.records
-        if record.ocr_original and record.source_kind in {"image_region", "full_page"}
-    ]
+    ocr_supplements = build_ocr_supplements(reconciliation)
 
     return {
         "schema_version": 1,
@@ -234,6 +396,7 @@ def build_canonical_source(
             "records": reconciliation_records,
         },
         "markers": markers,
+        "logical_markers": logical_markers,
         "ocr_supplements": ocr_supplements,
         "needs_review": needs_review,
         "provenance": {
@@ -294,7 +457,7 @@ def render_problem_markdown(canonical: dict[str, Any]) -> str:
         )
 
     lines.extend(["# PDF Marking Record", ""])
-    markers = canonical["markers"]
+    markers = canonical["logical_markers"]
     if not markers:
         lines.extend(["No classified marker candidates.", ""])
     for marker in markers:
@@ -305,10 +468,13 @@ def render_problem_markdown(canonical: dict[str, Any]) -> str:
                 f"- Page: {marker['page_number']}",
                 f"- Color: {marker['color']}",
                 f"- Paint: {marker['paint']}",
-                f"- BBox: {marker['bbox']}",
+                f"- Union BBox: {marker['bbox']}",
+                f"- Fragment BBoxes: {marker['bbox_list']}",
                 f"- Exact text: {marker['exact_text']!r}",
-                f"- Word candidate: {marker['word_candidate']!r}",
+                f"- Word candidates: {marker['word_candidates']!r}",
                 f"- Start/end char: {marker['start_char']} / {marker['end_char']}",
+                f"- Raw vector IDs: {marker['raw_vector_ids']}",
+                f"- Constituent marker IDs: {marker['constituent_marker_ids']}",
                 f"- Boundary confidence: {marker['boundary_confidence']}",
                 f"- Review status: {marker['review_status']}",
                 "",
@@ -419,8 +585,8 @@ def validate_problem_packet(
         for item in canonical["ocr_supplements"]
         if item.get("text")
     )
-    checks["marker_records_present"] = all(
-        str(item["id"]) in markdown for item in canonical["markers"]
+    checks["logical_marker_records_present"] = all(
+        str(item["id"]) in markdown for item in canonical["logical_markers"]
     )
     checks["needs_review_records_present"] = all(
         str(item["id"]) in markdown for item in canonical["needs_review"]
@@ -448,6 +614,24 @@ def validate_problem_packet(
             raw.drawing_index == drawing_index for raw in page.raw_vector_drawings
         )
     checks["raw_vector_refs_valid"] = raw_refs_ok
+    raw_marker_ids = {str(marker["id"]) for marker in canonical["markers"]}
+    logical_refs_ok = True
+    for marker in canonical["logical_markers"]:
+        page = page_by_number.get(int(marker["page_number"]))
+        logical_refs_ok = logical_refs_ok and page is not None
+        logical_refs_ok = logical_refs_ok and all(
+            str(marker_id) in raw_marker_ids
+            for marker_id in marker["constituent_marker_ids"]
+        )
+        logical_refs_ok = logical_refs_ok and all(
+            any(raw.drawing_index == int(raw_id) for raw in page.raw_vector_drawings)
+            for raw_id in marker["raw_vector_ids"]
+        )
+    checks["logical_marker_refs_valid"] = logical_refs_ok
+    checks["ocr_supplements_exclude_surgical"] = all(
+        item["source_kind"] in {"image_region", "full_page"}
+        for item in canonical["ocr_supplements"]
+    )
     provenance_refs = [
         canonical["provenance"].get(key)
         for key in ("inspection", "ocr", "review_manifest", "reconciliation")
@@ -478,8 +662,9 @@ def validate_problem_packet(
         checks["frontmatter_needs_review_count_matches"] = False
         checks["frontmatter_source_sha_matches"] = False
 
-    valid = all(checks.values())
     upload_files = [markdown_path.name, *sorted(set(evidence_refs))]
+    checks["upload_files_unique"] = len(upload_files) == len(set(upload_files))
+    valid = all(checks.values())
     return {
         "schema_version": 1,
         "valid": valid,

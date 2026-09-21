@@ -20,6 +20,11 @@ def _marked_pdf(path: Path) -> None:
     yellow.finish(color=(1.0, 1.0, 0.5137255), width=7, stroke_opacity=0.5)
     yellow.commit()
 
+    second_yellow = page.new_shape()
+    second_yellow.draw_line((220, 76), (260, 76))
+    second_yellow.finish(color=(1.0, 1.0, 0.5137255), width=7, stroke_opacity=0.5)
+    second_yellow.commit()
+
     red = page.new_shape()
     red.draw_line((180, 80), (210, 95))
     red.finish(color=(1.0, 0.1647059, 0.1333181), width=2)
@@ -65,7 +70,16 @@ def test_pipeline_writes_valid_problem_packet_with_relative_evidence(tmp_path: P
     assert validation["valid"] is True
     assert validation["checks"]["yaml_parseable"] is True
     assert validation["checks"]["native_text_present"] is True
+    assert validation["checks"]["upload_files_unique"] is True
     assert "ABC DEF GHI JKL MNO" in markdown
+
+    evidence_refs = [
+        item["evidence_image"]
+        for item in canonical["needs_review"]
+        if item.get("evidence_image")
+    ]
+    assert len(evidence_refs) > len(set(evidence_refs))
+    assert len(validation["upload_files"]) == len(set(validation["upload_files"]))
 
     end = markdown.find("\n---\n", 4)
     frontmatter = yaml.safe_load(markdown[4:end])

@@ -27,6 +27,8 @@ from legal_study.source_store import SourceSnapshot, verify_snapshot
 from legal_study.state import RunStateMissingError, RunStateStore
 
 _STEP_VERSION = "2"
+_RECONCILIATION_STEP_VERSION = "3"
+_PROBLEM_PACKET_STEP_VERSION = "3"
 
 
 class PdfIngestPipeline:
@@ -274,12 +276,19 @@ class PdfIngestPipeline:
         return resolved_path.relative_to(resolved_out).as_posix()
 
     @staticmethod
-    def _begin(state: RunStateStore, prepared: PreparedRun, step_name: str, input_hash: str) -> None:
+    def _begin(
+        state: RunStateStore,
+        prepared: PreparedRun,
+        step_name: str,
+        input_hash: str,
+        *,
+        version: str = _STEP_VERSION,
+    ) -> None:
         state.begin_step(
             prepared.manifest.run_id,
             step_name,
             input_hash=input_hash,
-            version=_STEP_VERSION,
+            version=version,
         )
 
     @staticmethod
@@ -652,7 +661,7 @@ class PdfIngestPipeline:
                     prepared.manifest.run_id,
                     step_name,
                     input_hash=input_hash,
-                    version=_STEP_VERSION,
+                    version=_RECONCILIATION_STEP_VERSION,
                     output_hash=file_sha256(artifact),
                 ):
                     return result, file_sha256(artifact)
@@ -660,7 +669,13 @@ class PdfIngestPipeline:
                 pass
 
         self._archive_step_artifacts(prepared.output_dir, step_name)
-        self._begin(state, prepared, step_name, input_hash)
+        self._begin(
+            state,
+            prepared,
+            step_name,
+            input_hash,
+            version=_RECONCILIATION_STEP_VERSION,
+        )
         try:
             ocr_payload = json.loads((out / "ocr.json").read_text(encoding="utf-8"))
             review_payload = json.loads(
@@ -703,14 +718,20 @@ class PdfIngestPipeline:
                 prepared.manifest.run_id,
                 step_name,
                 input_hash=input_hash,
-                version=_STEP_VERSION,
+                version=_PROBLEM_PACKET_STEP_VERSION,
                 output_hash=output_hash,
             ):
                 return output_hash
 
         for path in packet_paths:
             self._archive_file(out, step_name, path)
-        self._begin(state, prepared, step_name, input_hash)
+        self._begin(
+            state,
+            prepared,
+            step_name,
+            input_hash,
+            version=_PROBLEM_PACKET_STEP_VERSION,
+        )
         try:
             ocr_payload = json.loads((out / "ocr.json").read_text(encoding="utf-8"))
             write_problem_packet(

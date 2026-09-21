@@ -149,4 +149,6 @@ P1-Cではnative/OCR evidenceを保守的に照合し、`AUTO_VERIFIED / NEEDS_R
 
 生成された`problem.md`はChatGPT Projectへ渡す主要成果物です。視覚判断が必要な赤vector、OCR-only画像、境界未確定marker等は`Needs Review`へ残し、run-relativeなevidence参照を保持します。
 
+`canonical_source.json`は個々のmarker fragmentを`markers`へ保持したまま、安全に連続性を確認できた同色・同一行のfragmentだけを`logical_markers`へ統合します。`problem.md`はlogical markerを表示し、構成元marker IDとraw vector IDをprovenanceとして残します。OCR Supplementsにはfull-page/image-region OCRだけを載せ、surgical OCRはreconciliation evidenceとして保持します。
+
 最終調整はローカルCodexで行いやすいよう、各処理を独立モジュールに分割してあります。

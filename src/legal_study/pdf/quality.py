@@ -10,7 +10,12 @@ def _is_expected_letter_or_number(c: str) -> bool:
     if _JP_RE.match(c):
         return True
     normalized = unicodedata.normalize("NFKC", c)
-    return len(normalized) == 1 and normalized.isascii() and normalized.isalnum()
+    if len(normalized) == 1 and normalized.isascii() and normalized.isalnum():
+        return True
+    # Parenthesized / circled list numbers are common in Japanese legal writing.
+    # NFKC expands them to forms such as "(1)"; that expansion is expected text,
+    # not evidence of a broken ToUnicode map.
+    return bool(re.fullmatch(r"\(?[0-9]+\)?", normalized))
 
 
 def is_suspicious_char(c: str) -> bool:
