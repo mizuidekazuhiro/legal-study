@@ -55,11 +55,13 @@ def test_pipeline_writes_valid_problem_packet_with_relative_evidence(tmp_path: P
     markdown_path = prepared.output_dir / "criminal_15_problem.md"
     validation_path = prepared.output_dir / "problem_validation.json"
     reconciliation_path = prepared.output_dir / "reconciliation.json"
+    repair_path = prepared.output_dir / "repair.json"
 
     assert canonical_path.is_file()
     assert markdown_path.is_file()
     assert validation_path.is_file()
     assert reconciliation_path.is_file()
+    assert repair_path.is_file()
 
     canonical = json.loads(canonical_path.read_text(encoding="utf-8"))
     validation = json.loads(validation_path.read_text(encoding="utf-8"))
@@ -71,6 +73,12 @@ def test_pipeline_writes_valid_problem_packet_with_relative_evidence(tmp_path: P
     assert validation["checks"]["yaml_parseable"] is True
     assert validation["checks"]["native_text_present"] is True
     assert validation["checks"]["upload_files_unique"] is True
+    assert validation["checks"]["repair_source_sha_matches"] is True
+    assert validation["checks"]["auto_repairs_have_provenance"] is True
+    assert validation["checks"]["protected_content_never_auto_repaired"] is True
+    assert (
+        validation["checks"]["low_trust_auto_repairs_have_full_page_support"] is True
+    )
     assert "ABC DEF GHI JKL MNO" in markdown
 
     evidence_refs = [
@@ -113,6 +121,7 @@ def test_problem_packet_resume_keeps_outputs_byte_identical(tmp_path: Path) -> N
     pipeline.run(snapshot, prepared, pages=[1])
     names = [
         "reconciliation.json",
+        "repair.json",
         "canonical_source.json",
         "criminal_resume_problem.md",
         "problem_validation.json",
