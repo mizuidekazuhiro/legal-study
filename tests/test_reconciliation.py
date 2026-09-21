@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from legal_study.models import BBox, DocumentInspection, PageInspection, PageMode
+from legal_study.models import DocumentInspection, PageInspection, PageMode
 from legal_study.reconciliation import (
     ReviewStatus,
     build_reconciliation,
