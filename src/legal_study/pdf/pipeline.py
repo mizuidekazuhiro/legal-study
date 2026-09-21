@@ -891,7 +891,15 @@ class PdfIngestPipeline:
                             padding=padding,
                             page_rotation=inspected_page.rotation,
                             reason=region.reason,
-                            extra={"native_candidate": region.text},
+                            extra={
+                                "native_candidate": region.text,
+                                "native_bbox": [
+                                    region.bbox.x0,
+                                    region.bbox.y0,
+                                    region.bbox.x1,
+                                    region.bbox.y1,
+                                ],
+                            },
                         )
                     )
 
