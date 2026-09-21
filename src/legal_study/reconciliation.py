@@ -75,7 +75,7 @@ def _record_from_ocr(
 ) -> ReconciliationRecord:
     target = evidence.get("target")
     if not isinstance(target, dict):
-        raise ValueError("OCR evidence is missing target metadata")
+        raise TypeError("OCR evidence is missing target metadata")
     kind = str(target.get("kind", "unknown"))
     native = target.get("native_candidate")
     native_text = str(native) if isinstance(native, str) else None
@@ -140,7 +140,7 @@ def build_reconciliation(
     records: list[ReconciliationRecord] = []
     ocr_pages = ocr_payload.get("pages", {})
     if not isinstance(ocr_pages, dict):
-        raise ValueError("ocr.json pages must be an object")
+        raise TypeError("ocr.json pages must be an object")
 
     for page in inspection.pages:
         page_payload = ocr_pages.get(str(page.page_number), {})
@@ -157,7 +157,7 @@ def build_reconciliation(
             )
         regions = page_payload.get("regions", [])
         if not isinstance(regions, list):
-            raise ValueError("OCR page regions must be a list")
+            raise TypeError("OCR page regions must be a list")
         for index, evidence in enumerate(regions, start=1):
             if not isinstance(evidence, dict):
                 continue
@@ -171,7 +171,7 @@ def build_reconciliation(
 
     review_pages = review_payload.get("pages", [])
     if not isinstance(review_pages, list):
-        raise ValueError("review_manifest.json pages must be a list")
+        raise TypeError("review_manifest.json pages must be a list")
     for page_payload in review_pages:
         if not isinstance(page_payload, dict):
             continue
