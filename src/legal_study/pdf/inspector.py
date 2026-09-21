@@ -6,6 +6,7 @@ from pathlib import Path
 
 import fitz
 
+from legal_study.io_utils import atomic_output_path
 from legal_study.models import (
     BBox,
     DocumentInspection,
@@ -116,7 +117,8 @@ class PdfInspector:
         if output_dir is not None:
             rendered = output_dir / f"page-{page_number:04d}.png"
             pix = page.get_pixmap(dpi=self.render_dpi, alpha=False)
-            pix.save(rendered)
+            with atomic_output_path(rendered) as temporary:
+                pix.save(temporary)
 
         return PageInspection(
             page_number=page_number,

@@ -95,7 +95,7 @@ def test_pipeline_uses_snapshot_after_original_is_removed(tmp_path: Path) -> Non
         settings=settings,
     )
 
-    result = pipeline.run(snapshot, prepared.output_dir)
+    result = pipeline.run(snapshot, prepared)
 
     assert result.sha256 == snapshot.sha256
     assert result.source_path == snapshot.snapshot_path

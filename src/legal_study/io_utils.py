@@ -4,6 +4,8 @@ import hashlib
 import json
 import os
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -31,3 +33,18 @@ def atomic_write_text(path: Path, content: str) -> None:
 
 def atomic_write_json(path: Path, payload: Any) -> None:
     atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+
+
+@contextmanager
+def atomic_output_path(path: Path) -> Iterator[Path]:
+    """Yield a same-directory temporary path and atomically publish it on success."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.parent / f".{path.stem}.{uuid.uuid4().hex}.tmp{path.suffix}"
+    try:
+        yield temporary
+        with temporary.open("rb+") as file_handle:
+            os.fsync(file_handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)

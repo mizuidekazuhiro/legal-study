@@ -1,13 +1,19 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
+from legal_study.io_utils import atomic_output_path, atomic_write_json, file_sha256
 from legal_study.models import BBox, DocumentInspection
 from legal_study.pdf.inspector import PdfInspector
 from legal_study.pdf.ocr.base import OcrEngine
 from legal_study.pdf.vector_marks import cluster_red_pen_marks
+from legal_study.run_manifest import PreparedRun, update_manifest_page_count
 from legal_study.source_store import SourceSnapshot, verify_snapshot
+from legal_study.state import RunStateStore
+
+_STEP_VERSION = "1"
 
 
 class PdfIngestPipeline:
@@ -40,62 +46,348 @@ class PdfIngestPipeline:
     def run(
         self,
         source: SourceSnapshot,
-        output_dir: str | Path,
+        prepared: PreparedRun,
         *,
         pages: list[int] | None = None,
     ) -> DocumentInspection:
         verify_snapshot(source)
         snapshot_path = source.snapshot_path
-        out = Path(output_dir).resolve()
+        out = prepared.output_dir
         render_dir = out / "renders"
         out.mkdir(parents=True, exist_ok=True)
+        state = RunStateStore(prepared.state_db)
+        state.register_run(prepared.manifest, prepared.manifest_path)
+        try:
+            self._record_source_step(state, prepared, source)
+            inspection, inspection_hash = self._inspection_step(
+                state, prepared, snapshot_path, render_dir, pages
+            )
+            update_manifest_page_count(prepared, inspection.page_count)
+            review_crops, ocr_targets, crops_hash = self._crops_step(
+                state, prepared, snapshot_path, inspection, out
+            )
+            ocr_hash = self._ocr_step(state, prepared, inspection, ocr_targets, out)
+            review_hash = self._review_manifest_step(
+                state,
+                prepared,
+                inspection,
+                review_crops,
+                ocr_targets,
+                out,
+                upstream_hashes=[inspection_hash, crops_hash, ocr_hash],
+            )
+            final_hash = self._hash_values(
+                inspection_hash, crops_hash, ocr_hash, review_hash
+            )
+            self._complete_final_step(state, prepared, final_hash)
+            state.set_run_status(prepared.manifest.run_id, "COMPLETED")
+            return inspection
+        except Exception as exc:
+            state.set_run_status(prepared.manifest.run_id, "FAILED", error=repr(exc))
+            raise
 
-        inspection = self.inspector.inspect(snapshot_path, pages=pages, render_dir=render_dir)
-        review_crops = self._render_review_crops(
-            snapshot_path,
-            inspection,
-            out / "review_crops",
-            dpi=self.review_crop_dpi,
-        )
-        ocr_targets = self._render_ocr_targets(
-            snapshot_path,
-            inspection,
-            out / "ocr_crops",
-            dpi=self.ocr_crop_dpi,
+    @staticmethod
+    def _hash_values(*values: str) -> str:
+        return hashlib.sha256("\0".join(values).encode()).hexdigest()
+
+    @staticmethod
+    def _artifact_is_resumable(
+        state: RunStateStore,
+        prepared: PreparedRun,
+        step_name: str,
+        input_hash: str,
+        artifact: Path,
+    ) -> bool:
+        if not artifact.is_file():
+            return False
+        return state.can_resume(
+            prepared.manifest.run_id,
+            step_name,
+            input_hash=input_hash,
+            version=_STEP_VERSION,
+            output_hash=file_sha256(artifact),
         )
 
-        ocr_results: dict[str, object] = {"pages": {}}
-        if self.ocr_engine is not None:
-            for page in inspection.pages:
-                page_result: dict[str, object] = {}
-                if page.ocr_recommended and page.rendered_image:
-                    page_result["full_page"] = self.ocr_engine.recognize(
-                        page.rendered_image
-                    ).model_dump(mode="json")
+    def _inspection_bundle_hash(
+        self, artifact: Path, inspection: DocumentInspection
+    ) -> str | None:
+        render_paths = [page.rendered_image for page in inspection.pages]
+        if any(path is None or not path.is_file() for path in render_paths):
+            return None
+        return self._hash_values(
+            file_sha256(artifact),
+            *(file_sha256(path) for path in render_paths if path is not None),
+        )
 
-                region_results: list[dict[str, object]] = []
-                for target in ocr_targets.get(page.page_number, []):
-                    crop_path = Path(str(target["image"]))
-                    result = self.ocr_engine.recognize(crop_path)
-                    region_results.append({**target, "result": result.model_dump(mode="json")})
-                if region_results:
-                    page_result["regions"] = region_results
-                if page_result:
-                    ocr_results["pages"][str(page.page_number)] = page_result
+    def _crop_bundle_hash(self, artifact: Path, payload: dict[str, object]) -> str | None:
+        if not self._crop_images_exist(payload):
+            return None
+        paths: list[Path] = []
+        for group_name in ("review_crops", "ocr_targets"):
+            group = payload.get(group_name, {})
+            assert isinstance(group, dict)
+            for items in group.values():
+                assert isinstance(items, list)
+                paths.extend(Path(str(item["image"])) for item in items)
+        return self._hash_values(
+            file_sha256(artifact),
+            *(file_sha256(path) for path in sorted(paths, key=str)),
+        )
 
-        (out / "inspection.json").write_text(
-            inspection.model_dump_json(indent=2), encoding="utf-8"
+    @staticmethod
+    def _begin(state: RunStateStore, prepared: PreparedRun, step_name: str, input_hash: str) -> None:
+        state.begin_step(
+            prepared.manifest.run_id,
+            step_name,
+            input_hash=input_hash,
+            version=_STEP_VERSION,
         )
-        (out / "ocr.json").write_text(
-            json.dumps(ocr_results, ensure_ascii=False, indent=2), encoding="utf-8"
+
+    @staticmethod
+    def _fail(
+        state: RunStateStore, prepared: PreparedRun, step_name: str, exc: Exception
+    ) -> None:
+        state.fail_step(prepared.manifest.run_id, step_name, error=repr(exc))
+
+    def _record_source_step(
+        self, state: RunStateStore, prepared: PreparedRun, source: SourceSnapshot
+    ) -> None:
+        step_name = "SOURCE_RESOLVED"
+        if state.can_resume(
+            prepared.manifest.run_id,
+            step_name,
+            input_hash=source.sha256,
+            version=_STEP_VERSION,
+            output_hash=source.sha256,
+        ):
+            return
+        self._begin(state, prepared, step_name, source.sha256)
+        state.complete_step(
+            prepared.manifest.run_id, step_name, output_hash=source.sha256
         )
-        self._write_review_manifest(
-            inspection,
-            out / "review_manifest.json",
-            review_crops=review_crops,
-            ocr_targets=ocr_targets,
+
+    def _inspection_step(
+        self,
+        state: RunStateStore,
+        prepared: PreparedRun,
+        snapshot_path: Path,
+        render_dir: Path,
+        pages: list[int] | None,
+    ) -> tuple[DocumentInspection, str]:
+        step_name = "PDF_INSPECTED"
+        artifact = prepared.output_dir / "inspection.json"
+        input_hash = self._hash_values(prepared.manifest.input_hash, step_name)
+        if artifact.is_file():
+            inspection = DocumentInspection.model_validate_json(
+                artifact.read_text(encoding="utf-8")
+            )
+            bundle_hash = self._inspection_bundle_hash(artifact, inspection)
+            if bundle_hash is not None and state.can_resume(
+                prepared.manifest.run_id,
+                step_name,
+                input_hash=input_hash,
+                version=_STEP_VERSION,
+                output_hash=bundle_hash,
+            ):
+                return inspection, bundle_hash
+
+        self._begin(state, prepared, step_name, input_hash)
+        try:
+            inspection = self.inspector.inspect(
+                snapshot_path, pages=pages, render_dir=render_dir
+            )
+            atomic_write_json(artifact, inspection.model_dump(mode="json"))
+            output_hash = self._inspection_bundle_hash(artifact, inspection)
+            assert output_hash is not None
+            state.complete_step(
+                prepared.manifest.run_id, step_name, output_hash=output_hash
+            )
+            return inspection, output_hash
+        except Exception as exc:
+            self._fail(state, prepared, step_name, exc)
+            raise
+
+    def _crops_step(
+        self,
+        state: RunStateStore,
+        prepared: PreparedRun,
+        snapshot_path: Path,
+        inspection: DocumentInspection,
+        out: Path,
+    ) -> tuple[
+        dict[int, list[dict[str, object]]],
+        dict[int, list[dict[str, object]]],
+        str,
+    ]:
+        step_name = "EVIDENCE_CROPS_RENDERED"
+        artifact = out / "evidence_crops.json"
+        input_hash = self._hash_values(
+            prepared.manifest.input_hash,
+            step_name,
+            file_sha256(out / "inspection.json"),
         )
-        return inspection
+        if artifact.is_file():
+            payload = json.loads(artifact.read_text(encoding="utf-8"))
+            bundle_hash = self._crop_bundle_hash(artifact, payload)
+            if bundle_hash is not None and state.can_resume(
+                prepared.manifest.run_id,
+                step_name,
+                input_hash=input_hash,
+                version=_STEP_VERSION,
+                output_hash=bundle_hash,
+            ):
+                return (
+                    self._int_keys(payload["review_crops"]),
+                    self._int_keys(payload["ocr_targets"]),
+                    bundle_hash,
+                )
+
+        self._begin(state, prepared, step_name, input_hash)
+        try:
+            review_crops = self._render_review_crops(
+                snapshot_path,
+                inspection,
+                out / "review_crops",
+                dpi=self.review_crop_dpi,
+            )
+            ocr_targets = self._render_ocr_targets(
+                snapshot_path,
+                inspection,
+                out / "ocr_crops",
+                dpi=self.ocr_crop_dpi,
+            )
+            payload = {"review_crops": review_crops, "ocr_targets": ocr_targets}
+            atomic_write_json(artifact, payload)
+            output_hash = self._crop_bundle_hash(artifact, payload)
+            assert output_hash is not None
+            state.complete_step(
+                prepared.manifest.run_id, step_name, output_hash=output_hash
+            )
+            return review_crops, ocr_targets, output_hash
+        except Exception as exc:
+            self._fail(state, prepared, step_name, exc)
+            raise
+
+    @staticmethod
+    def _int_keys(value: dict[str, object]) -> dict[int, list[dict[str, object]]]:
+        return {int(key): list(items) for key, items in value.items()}  # type: ignore[arg-type]
+
+    @staticmethod
+    def _crop_images_exist(payload: dict[str, object]) -> bool:
+        groups = (payload.get("review_crops", {}), payload.get("ocr_targets", {}))
+        for group in groups:
+            if not isinstance(group, dict):
+                return False
+            for items in group.values():
+                if not isinstance(items, list):
+                    return False
+                for item in items:
+                    if not isinstance(item, dict) or not Path(str(item.get("image", ""))).is_file():
+                        return False
+        return True
+
+    def _ocr_step(
+        self,
+        state: RunStateStore,
+        prepared: PreparedRun,
+        inspection: DocumentInspection,
+        ocr_targets: dict[int, list[dict[str, object]]],
+        out: Path,
+    ) -> str:
+        step_name = "OCR_COMPLETE"
+        artifact = out / "ocr.json"
+        input_hash = self._hash_values(
+            prepared.manifest.input_hash,
+            step_name,
+            file_sha256(out / "evidence_crops.json"),
+        )
+        if self._artifact_is_resumable(state, prepared, step_name, input_hash, artifact):
+            return file_sha256(artifact)
+
+        self._begin(state, prepared, step_name, input_hash)
+        try:
+            ocr_results: dict[str, object] = {"pages": {}}
+            if self.ocr_engine is not None:
+                for page in inspection.pages:
+                    page_result: dict[str, object] = {}
+                    if page.ocr_recommended and page.rendered_image:
+                        page_result["full_page"] = self.ocr_engine.recognize(
+                            page.rendered_image
+                        ).model_dump(mode="json")
+
+                    region_results: list[dict[str, object]] = []
+                    for target in ocr_targets.get(page.page_number, []):
+                        crop_path = Path(str(target["image"]))
+                        result = self.ocr_engine.recognize(crop_path)
+                        region_results.append(
+                            {**target, "result": result.model_dump(mode="json")}
+                        )
+                    if region_results:
+                        page_result["regions"] = region_results
+                    if page_result:
+                        ocr_results["pages"][str(page.page_number)] = page_result
+            atomic_write_json(artifact, ocr_results)
+            output_hash = file_sha256(artifact)
+            state.complete_step(
+                prepared.manifest.run_id, step_name, output_hash=output_hash
+            )
+            return output_hash
+        except Exception as exc:
+            self._fail(state, prepared, step_name, exc)
+            raise
+
+    def _review_manifest_step(
+        self,
+        state: RunStateStore,
+        prepared: PreparedRun,
+        inspection: DocumentInspection,
+        review_crops: dict[int, list[dict[str, object]]],
+        ocr_targets: dict[int, list[dict[str, object]]],
+        out: Path,
+        *,
+        upstream_hashes: list[str],
+    ) -> str:
+        step_name = "REVIEW_MANIFEST_WRITTEN"
+        artifact = out / "review_manifest.json"
+        input_hash = self._hash_values(
+            prepared.manifest.input_hash, step_name, *upstream_hashes
+        )
+        if self._artifact_is_resumable(state, prepared, step_name, input_hash, artifact):
+            return file_sha256(artifact)
+        self._begin(state, prepared, step_name, input_hash)
+        try:
+            self._write_review_manifest(
+                inspection,
+                artifact,
+                review_crops=review_crops,
+                ocr_targets=ocr_targets,
+            )
+            output_hash = file_sha256(artifact)
+            state.complete_step(
+                prepared.manifest.run_id, step_name, output_hash=output_hash
+            )
+            return output_hash
+        except Exception as exc:
+            self._fail(state, prepared, step_name, exc)
+            raise
+
+    def _complete_final_step(
+        self, state: RunStateStore, prepared: PreparedRun, final_hash: str
+    ) -> None:
+        step_name = "INGEST_COMPLETE"
+        input_hash = self._hash_values(prepared.manifest.input_hash, step_name, final_hash)
+        if state.can_resume(
+            prepared.manifest.run_id,
+            step_name,
+            input_hash=input_hash,
+            version=_STEP_VERSION,
+            output_hash=final_hash,
+        ):
+            return
+        self._begin(state, prepared, step_name, input_hash)
+        state.complete_step(
+            prepared.manifest.run_id, step_name, output_hash=final_hash
+        )
 
     @staticmethod
     def _clip_box(page_rect, box: BBox, padding: float):
@@ -125,7 +417,9 @@ class PdfIngestPipeline:
                 for index, box in enumerate(clusters, start=1):
                     clip = cls._clip_box(page.rect, box, padding=8)
                     path = crop_dir / f"page-{inspected_page.page_number:04d}-red-{index:03d}.png"
-                    page.get_pixmap(dpi=dpi, clip=clip, alpha=False).save(path)
+                    pixmap = page.get_pixmap(dpi=dpi, clip=clip, alpha=False)
+                    with atomic_output_path(path) as temporary:
+                        pixmap.save(temporary)
                     page_items.append(
                         {
                             "kind": "red_pen_cluster",
@@ -163,7 +457,9 @@ class PdfIngestPipeline:
                     path = crop_dir / (
                         f"page-{inspected_page.page_number:04d}-suspect-{index:03d}.png"
                     )
-                    page.get_pixmap(dpi=dpi, clip=clip, alpha=False).save(path)
+                    pixmap = page.get_pixmap(dpi=dpi, clip=clip, alpha=False)
+                    with atomic_output_path(path) as temporary:
+                        pixmap.save(temporary)
                     items.append(
                         {
                             "kind": "suspect_native_text",
@@ -219,4 +515,4 @@ class PdfIngestPipeline:
                 for p in inspection.pages
             ],
         }
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        atomic_write_json(path, payload)

@@ -45,6 +45,7 @@ class RunManifest(BaseModel):
 class PreparedRun(BaseModel):
     output_dir: Path
     manifest_path: Path
+    state_db: Path
     manifest: RunManifest
 
 
@@ -116,6 +117,7 @@ def prepare_run(
         return PreparedRun(
             output_dir=resolved_output,
             manifest_path=manifest_path,
+            state_db=cfg.state_db,
             manifest=existing,
         )
 
@@ -147,6 +149,7 @@ def prepare_run(
     return PreparedRun(
         output_dir=resolved_output,
         manifest_path=manifest_path,
+        state_db=cfg.state_db,
         manifest=manifest,
     )
 

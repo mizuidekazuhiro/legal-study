@@ -13,7 +13,7 @@ from rich.table import Table
 from legal_study.pdf.inspector import PdfInspector
 from legal_study.pdf.ocr.paddle import PaddleOcrEngine
 from legal_study.pdf.pipeline import PdfIngestPipeline
-from legal_study.run_manifest import prepare_run, update_manifest_page_count
+from legal_study.run_manifest import prepare_run
 from legal_study.settings import LocalSettings
 from legal_study.source_store import snapshot_source
 
@@ -138,8 +138,7 @@ def ingest(
         output_dir=output_dir,
         settings=settings,
     )
-    result = pipeline.run(snapshot, prepared.output_dir, pages=parsed_pages)
-    prepared = update_manifest_page_count(prepared, result.page_count)
+    result = pipeline.run(snapshot, prepared, pages=parsed_pages)
     console.print(
         json.dumps(
             {
