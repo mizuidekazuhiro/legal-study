@@ -27,3 +27,26 @@ def test_inspector_detects_flattened_vector_marks(tmp_path: Path) -> None:
     assert "highlight_stroke" in kinds
     assert "red_pen_stroke" in kinds
     assert inspected.vision_review_recommended is True
+
+
+def test_inspector_preserves_annotation_vertices_without_crashing(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "annotation.pdf"
+    doc = fitz.open()
+    page = doc.new_page(width=400, height=400)
+    page.insert_text((50, 80), "ABC DEF GHI", fontsize=12)
+    annotation = page.add_highlight_annot(fitz.Rect(48, 67, 130, 84))
+    annotation.update()
+    doc.save(pdf_path)
+    doc.close()
+
+    result = PdfInspector(min_native_chars=1).inspect(pdf_path)
+
+    annotations = result.pages[0].annotations
+    assert len(annotations) == 1
+    assert annotations[0].type_name == "Highlight"
+    assert annotations[0].vertices == [
+        (48.0, 67.0),
+        (130.0, 67.0),
+        (48.0, 84.0),
+        (130.0, 84.0),
+    ]

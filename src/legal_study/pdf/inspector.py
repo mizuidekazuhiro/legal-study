@@ -208,8 +208,12 @@ class PdfInspector:
         annot = page.first_annot
         while annot is not None:
             vertices = []
-            if annot.vertices:
-                vertices = [(float(p.x), float(p.y)) for p in annot.vertices]
+            annotation_vertices = annot.vertices
+            if annotation_vertices:
+                vertices = [
+                    (float(point.x), float(point.y))
+                    for point in (fitz.Point(value) for value in annotation_vertices)
+                ]
             rect = annot.rect
             out.append(
                 PdfAnnotation(
