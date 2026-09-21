@@ -75,6 +75,25 @@ def _rect_overlap_ratio(a: list[float], b: list[float]) -> float:
     return intersection / area
 
 
+def _native_bbox_for_target(target: dict[str, Any]) -> list[float] | None:
+    native_bbox = target.get("native_bbox")
+    if isinstance(native_bbox, list) and len(native_bbox) == 4:
+        return [float(value) for value in native_bbox]
+    if target.get("kind") != "suspect_native_text":
+        return None
+    bbox = target.get("bbox")
+    padding = target.get("crop_padding_points", 0.0)
+    if not isinstance(bbox, list) or len(bbox) != 4:
+        return None
+    if not isinstance(padding, int | float):
+        return None
+    x0, y0, x1, y1 = (float(value) for value in bbox)
+    pad = max(float(padding), 0.0)
+    if x1 - x0 <= 2 * pad or y1 - y0 <= 2 * pad:
+        return [x0, y0, x1, y1]
+    return [x0 + pad, y0 + pad, x1 - pad, y1 - pad]
+
+
 def _ocr_candidate(
     evidence: dict[str, Any], target: dict[str, Any]
 ) -> tuple[str | None, float | None, bool | None]:
@@ -82,9 +101,9 @@ def _ocr_candidate(
     if not isinstance(result, dict):
         return None, None, False
 
-    native_bbox = target.get("native_bbox")
+    native_bbox = _native_bbox_for_target(target)
     lines = result.get("lines")
-    if isinstance(native_bbox, list) and len(native_bbox) == 4 and isinstance(lines, list):
+    if native_bbox is not None and isinstance(lines, list):
         best: tuple[float, str, float | None] | None = None
         for line in lines:
             if not isinstance(line, dict):
