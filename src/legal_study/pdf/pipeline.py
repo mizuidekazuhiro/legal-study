@@ -484,7 +484,7 @@ class PdfIngestPipeline:
         self._begin(state, prepared, step_name, input_hash)
         try:
             ocr_results: dict[str, object] = {
-                "schema_version": 2,
+                "schema_version": 3,
                 "native_text_replaced": False,
                 "backend": self._backend_metadata(),
                 "routing_config": self.routing_config.as_dict(),
@@ -495,6 +495,8 @@ class PdfIngestPipeline:
                 page_result: dict[str, object] = {
                     "routing": {
                         "native_text_preserved": True,
+                        "text_layer_trust": page.text_layer_trust.value,
+                        "text_layer_origin": page.text_layer_origin.value,
                         "full_page_ocr": page.ocr_recommended,
                         "surgical_region_count": sum(
                             target.get("kind") == "suspect_native_text"
@@ -558,7 +560,11 @@ class PdfIngestPipeline:
             dpi=self.inspector.render_dpi,
             padding=0.0,
             page_rotation=page.rotation,
-            reason="insufficient_or_low_quality_native_text",
+            reason=(
+                "low_trust_embedded_text_layer"
+                if page.text_layer_trust.value == "low"
+                else "insufficient_or_low_quality_native_text"
+            ),
         )
 
     def _attach_input_metadata(
