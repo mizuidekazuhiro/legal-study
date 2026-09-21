@@ -11,6 +11,7 @@ from legal_study.io_utils import atomic_output_path
 from legal_study.models import (
     BBox,
     DocumentInspection,
+    NativeChar,
     NativeSpan,
     PageInspection,
     PageMode,
@@ -99,6 +100,7 @@ class PdfInspector:
         raw_image_regions = self._raw_image_regions(image_info)
         image_coverage, largest_image_coverage = self._image_coverage(page, image_info)
         spans = self._spans(page)
+        native_chars = self._native_chars(page)
         suspect_regions = self._suspect_regions(spans)
         suspicious_count = suspicious_char_count(native_text)
         annotations = self._annotations(page)
@@ -166,6 +168,7 @@ class PdfInspector:
             ocr_recommended=ocr_required,
             vision_review_recommended=vision_review,
             spans=spans,
+            native_chars=native_chars,
             raw_native=raw_native,
             annotations=annotations,
             raw_vector_drawings=raw_vector_drawings,
@@ -268,6 +271,36 @@ class PdfInspector:
         if isinstance(value, pymupdf.Matrix):
             return {"type": "matrix", "values": [float(item) for item in value]}
         raise TypeError(f"Unsupported PyMuPDF evidence value: {type(value).__name__}")
+
+    @staticmethod
+    def _native_chars(page: pymupdf.Page) -> list[NativeChar]:
+        output: list[NativeChar] = []
+        data = page.get_text("rawdict", sort=True)
+        global_index = 0
+        for block_index, block in enumerate(data.get("blocks", [])):
+            if block.get("type") != 0:
+                continue
+            for line_index, line in enumerate(block.get("lines", [])):
+                for span_index, span in enumerate(line.get("spans", [])):
+                    for char_index, char in enumerate(span.get("chars", [])):
+                        value = char.get("c")
+                        bbox = char.get("bbox")
+                        if not isinstance(value, str) or not bbox or len(bbox) != 4:
+                            continue
+                        x0, y0, x1, y1 = bbox
+                        output.append(
+                            NativeChar(
+                                index=global_index,
+                                char=value,
+                                bbox=BBox(x0=x0, y0=y0, x1=x1, y1=y1),
+                                block=block_index,
+                                line=line_index,
+                                span=span_index,
+                                char_in_span=char_index,
+                            )
+                        )
+                        global_index += 1
+        return output
 
     @staticmethod
     def _spans(page: pymupdf.Page) -> list[NativeSpan]:
