@@ -22,13 +22,15 @@ from legal_study.pdf.ocr.routing import OcrRoutingConfig, routed_image_regions
 from legal_study.pdf.vector_marks import cluster_red_vector_evidence
 from legal_study.problem_packet import problem_markdown_filename, write_problem_packet
 from legal_study.reconciliation import ReconciliationResult, build_reconciliation
+from legal_study.repair import RepairResult, build_repairs
 from legal_study.run_manifest import PreparedRun, update_manifest_page_count
 from legal_study.source_store import SourceSnapshot, verify_snapshot
 from legal_study.state import RunStateMissingError, RunStateStore
 
 _STEP_VERSION = "2"
 _RECONCILIATION_STEP_VERSION = "3"
-_PROBLEM_PACKET_STEP_VERSION = "3"
+_REPAIR_STEP_VERSION = "1"
+_PROBLEM_PACKET_STEP_VERSION = "4"
 
 
 class PdfIngestPipeline:
@@ -118,13 +120,22 @@ class PdfIngestPipeline:
                 out,
                 upstream_hashes=[inspection_hash, ocr_hash, review_hash],
             )
-            packet_hash = self._problem_packet_step(
+            repair, repair_hash = self._repair_step(
                 state,
                 prepared,
                 inspection,
                 reconciliation,
                 out,
-                upstream_hashes=[reconciliation_hash, review_hash],
+                upstream_hashes=[reconciliation_hash, ocr_hash],
+            )
+            packet_hash = self._problem_packet_step(
+                state,
+                prepared,
+                inspection,
+                reconciliation,
+                repair,
+                out,
+                upstream_hashes=[reconciliation_hash, repair_hash, review_hash],
             )
             final_hash = self._hash_values(
                 inspection_hash,
@@ -132,6 +143,7 @@ class PdfIngestPipeline:
                 ocr_hash,
                 review_hash,
                 reconciliation_hash,
+                repair_hash,
                 packet_hash,
             )
             self._complete_final_step(state, prepared, final_hash)
@@ -192,6 +204,8 @@ class PdfIngestPipeline:
             fixed_files = [out / "review_manifest.json"]
         elif step_name == "RECONCILIATION_WRITTEN":
             fixed_files = [out / "reconciliation.json"]
+        elif step_name == "REPAIR_WRITTEN":
+            fixed_files = [out / "repair.json"]
         elif step_name == "PROBLEM_PACKET_WRITTEN":
             fixed_files = [out / "canonical_source.json", out / "problem_validation.json"]
         else:
@@ -698,6 +712,58 @@ class PdfIngestPipeline:
             self._fail(state, prepared, step_name, exc)
             raise
 
+    def _repair_step(
+        self,
+        state: RunStateStore,
+        prepared: PreparedRun,
+        inspection: DocumentInspection,
+        reconciliation: ReconciliationResult,
+        repair: RepairResult,
+        out: Path,
+        *,
+        upstream_hashes: list[str],
+    ) -> tuple[RepairResult, str]:
+        step_name = "REPAIR_WRITTEN"
+        artifact = out / "repair.json"
+        input_hash = self._hash_values(
+            prepared.manifest.input_hash, step_name, *upstream_hashes
+        )
+        if artifact.is_file():
+            try:
+                result = RepairResult.model_validate_json(
+                    artifact.read_text(encoding="utf-8")
+                )
+                if state.can_resume(
+                    prepared.manifest.run_id,
+                    step_name,
+                    input_hash=input_hash,
+                    version=_REPAIR_STEP_VERSION,
+                    output_hash=file_sha256(artifact),
+                ):
+                    return result, file_sha256(artifact)
+            except (OSError, ValueError):
+                pass
+
+        self._archive_step_artifacts(prepared.output_dir, step_name)
+        self._begin(
+            state,
+            prepared,
+            step_name,
+            input_hash,
+            version=_REPAIR_STEP_VERSION,
+        )
+        try:
+            result = build_repairs(inspection, reconciliation)
+            atomic_write_json(artifact, result.model_dump(mode="json"))
+            output_hash = file_sha256(artifact)
+            state.complete_step(
+                prepared.manifest.run_id, step_name, output_hash=output_hash
+            )
+            return result, output_hash
+        except Exception as exc:
+            self._fail(state, prepared, step_name, exc)
+            raise
+
     def _problem_packet_step(
         self,
         state: RunStateStore,
@@ -745,6 +811,7 @@ class PdfIngestPipeline:
                 manifest=prepared.manifest,
                 inspection=inspection,
                 reconciliation=reconciliation,
+                repair=repair,
                 ocr_payload=ocr_payload,
             )
             output_hash = self._hash_values(
