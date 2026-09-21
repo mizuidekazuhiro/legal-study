@@ -68,6 +68,8 @@ def test_pipeline_routes_full_page_and_image_region_as_separate_evidence(
     assert payload["native_text_replaced"] is False
     assert payload["pages"]["1"]["routing"] == {
         "native_text_preserved": True,
+        "text_layer_trust": "high",
+        "text_layer_origin": "born_digital_likely",
         "full_page_ocr": False,
         "surgical_region_count": 0,
         "image_region_count": 1,
