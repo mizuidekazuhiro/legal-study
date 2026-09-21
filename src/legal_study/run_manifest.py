@@ -138,7 +138,7 @@ def prepare_run(
         question=question,
         requested_pages=normalized_pages,
         source=snapshot,
-        output_dir=resolved_output,
+        output_dir=Path("."),
         pipeline_config=pipeline_config,
         app_version=__version__,
         python_version=platform.python_version(),

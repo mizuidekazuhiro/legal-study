@@ -60,4 +60,4 @@ LLM/Vision review is a later local evidence stage. A run may stop before it and 
 
 The code is separated so local Codex can adjust modules independently: source_store.py for immutable inputs, run_manifest.py for run identity, state/ for SQLite resume, pdf/inspector.py for routing, pdf/vector_marks.py for PDF drawing evidence, pdf/ocr for OCR adapters, and pdf/pipeline.py for artifact orchestration.
 
-The next local-Codex task should preserve raw annotation/vector/image evidence and add native/OCR/Vision reconciliation without introducing hard-coded machine paths.
+Raw native character geometry, annotation data, vector drawings, and image-region metadata are retained as evidence. Run artifact references are relative, so a complete run directory can move without embedding its former checkout or output location. Native/OCR/Vision reconciliation remains a later step.

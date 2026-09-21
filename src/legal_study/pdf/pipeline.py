@@ -165,18 +165,29 @@ class PdfIngestPipeline:
         )
 
     def _inspection_bundle_hash(
-        self, artifact: Path, inspection: DocumentInspection
+        self, out: Path, artifact: Path, inspection: DocumentInspection
     ) -> str | None:
-        render_paths = [page.rendered_image for page in inspection.pages]
-        if any(path is None or not path.is_file() for path in render_paths):
+        try:
+            render_paths = [
+                self._resolve_artifact(out, page.rendered_image)
+                for page in inspection.pages
+                if page.rendered_image is not None
+            ]
+        except ValueError:
+            return None
+        if len(render_paths) != len(inspection.pages) or any(
+            not path.is_file() for path in render_paths
+        ):
             return None
         return self._hash_values(
             file_sha256(artifact),
-            *(file_sha256(path) for path in render_paths if path is not None),
+            *(file_sha256(path) for path in render_paths),
         )
 
-    def _crop_bundle_hash(self, artifact: Path, payload: dict[str, object]) -> str | None:
-        if not self._crop_images_exist(payload):
+    def _crop_bundle_hash(
+        self, out: Path, artifact: Path, payload: dict[str, object]
+    ) -> str | None:
+        if not self._crop_images_exist(out, payload):
             return None
         paths: list[Path] = []
         for group_name in ("review_crops", "ocr_targets"):
@@ -184,11 +195,32 @@ class PdfIngestPipeline:
             assert isinstance(group, dict)
             for items in group.values():
                 assert isinstance(items, list)
-                paths.extend(Path(str(item["image"])) for item in items)
+                paths.extend(
+                    self._resolve_artifact(out, str(item["image"])) for item in items
+                )
         return self._hash_values(
             file_sha256(artifact),
             *(file_sha256(path) for path in sorted(paths, key=str)),
         )
+
+    @staticmethod
+    def _resolve_artifact(out: Path, reference: str) -> Path:
+        relative = Path(reference)
+        if relative.is_absolute():
+            raise ValueError(f"Artifact path must be run-relative: {reference}")
+        resolved_out = out.resolve()
+        resolved = (resolved_out / relative).resolve()
+        if not resolved.is_relative_to(resolved_out):
+            raise ValueError(f"Artifact path escapes the run directory: {reference}")
+        return resolved
+
+    @staticmethod
+    def _artifact_reference(out: Path, path: Path) -> str:
+        resolved_out = out.resolve()
+        resolved_path = path.resolve()
+        if not resolved_path.is_relative_to(resolved_out):
+            raise ValueError(f"Artifact is outside the run directory: {path}")
+        return resolved_path.relative_to(resolved_out).as_posix()
 
     @staticmethod
     def _begin(state: RunStateStore, prepared: PreparedRun, step_name: str, input_hash: str) -> None:
@@ -238,7 +270,9 @@ class PdfIngestPipeline:
                 inspection = DocumentInspection.model_validate_json(
                     artifact.read_text(encoding="utf-8")
                 )
-                bundle_hash = self._inspection_bundle_hash(artifact, inspection)
+                bundle_hash = self._inspection_bundle_hash(
+                    prepared.output_dir, artifact, inspection
+                )
                 if bundle_hash is not None and state.can_resume(
                     prepared.manifest.run_id,
                     step_name,
@@ -254,10 +288,15 @@ class PdfIngestPipeline:
         self._begin(state, prepared, step_name, input_hash)
         try:
             inspection = self.inspector.inspect(
-                snapshot_path, pages=pages, render_dir=render_dir
+                snapshot_path,
+                pages=pages,
+                render_dir=render_dir,
+                artifact_root=prepared.output_dir,
             )
             atomic_write_json(artifact, inspection.model_dump(mode="json"))
-            output_hash = self._inspection_bundle_hash(artifact, inspection)
+            output_hash = self._inspection_bundle_hash(
+                prepared.output_dir, artifact, inspection
+            )
             assert output_hash is not None
             state.complete_step(
                 prepared.manifest.run_id, step_name, output_hash=output_hash
@@ -289,7 +328,7 @@ class PdfIngestPipeline:
         if artifact.is_file():
             try:
                 payload = json.loads(artifact.read_text(encoding="utf-8"))
-                bundle_hash = self._crop_bundle_hash(artifact, payload)
+                bundle_hash = self._crop_bundle_hash(out, artifact, payload)
                 if bundle_hash is not None and state.can_resume(
                     prepared.manifest.run_id,
                     step_name,
@@ -312,17 +351,19 @@ class PdfIngestPipeline:
                 snapshot_path,
                 inspection,
                 out / "review_crops",
+                artifact_root=out,
                 dpi=self.review_crop_dpi,
             )
             ocr_targets = self._render_ocr_targets(
                 snapshot_path,
                 inspection,
                 out / "ocr_crops",
+                artifact_root=out,
                 dpi=self.ocr_crop_dpi,
             )
             payload = {"review_crops": review_crops, "ocr_targets": ocr_targets}
             atomic_write_json(artifact, payload)
-            output_hash = self._crop_bundle_hash(artifact, payload)
+            output_hash = self._crop_bundle_hash(out, artifact, payload)
             assert output_hash is not None
             state.complete_step(
                 prepared.manifest.run_id, step_name, output_hash=output_hash
@@ -337,7 +378,7 @@ class PdfIngestPipeline:
         return {int(key): list(items) for key, items in value.items()}  # type: ignore[arg-type]
 
     @staticmethod
-    def _crop_images_exist(payload: dict[str, object]) -> bool:
+    def _crop_images_exist(out: Path, payload: dict[str, object]) -> bool:
         groups = (payload.get("review_crops", {}), payload.get("ocr_targets", {}))
         for group in groups:
             if not isinstance(group, dict):
@@ -346,7 +387,15 @@ class PdfIngestPipeline:
                 if not isinstance(items, list):
                     return False
                 for item in items:
-                    if not isinstance(item, dict) or not Path(str(item.get("image", ""))).is_file():
+                    if not isinstance(item, dict):
+                        return False
+                    try:
+                        path = PdfIngestPipeline._resolve_artifact(
+                            out, str(item.get("image", ""))
+                        )
+                    except ValueError:
+                        return False
+                    if not path.is_file():
                         return False
         return True
 
@@ -377,12 +426,12 @@ class PdfIngestPipeline:
                     page_result: dict[str, object] = {}
                     if page.ocr_recommended and page.rendered_image:
                         page_result["full_page"] = self.ocr_engine.recognize(
-                            page.rendered_image
+                            self._resolve_artifact(out, page.rendered_image)
                         ).model_dump(mode="json")
 
                     region_results: list[dict[str, object]] = []
                     for target in ocr_targets.get(page.page_number, []):
-                        crop_path = Path(str(target["image"]))
+                        crop_path = self._resolve_artifact(out, str(target["image"]))
                         result = self.ocr_engine.recognize(crop_path)
                         region_results.append(
                             {**target, "result": result.model_dump(mode="json")}
@@ -466,7 +515,13 @@ class PdfIngestPipeline:
 
     @classmethod
     def _render_review_crops(
-        cls, source: str | Path, inspection: DocumentInspection, crop_dir: Path, dpi: int = 450
+        cls,
+        source: str | Path,
+        inspection: DocumentInspection,
+        crop_dir: Path,
+        *,
+        artifact_root: Path,
+        dpi: int = 450,
     ) -> dict[int, list[dict[str, object]]]:
         import fitz
 
@@ -490,7 +545,7 @@ class PdfIngestPipeline:
                         {
                             "kind": "red_vector_cluster",
                             "bbox": [clip.x0, clip.y0, clip.x1, clip.y1],
-                            "image": str(path),
+                            "image": cls._artifact_reference(artifact_root, path),
                         }
                     )
                 manifest[inspected_page.page_number] = page_items
@@ -500,7 +555,13 @@ class PdfIngestPipeline:
 
     @classmethod
     def _render_ocr_targets(
-        cls, source: str | Path, inspection: DocumentInspection, crop_dir: Path, dpi: int = 450
+        cls,
+        source: str | Path,
+        inspection: DocumentInspection,
+        crop_dir: Path,
+        *,
+        artifact_root: Path,
+        dpi: int = 450,
     ) -> dict[int, list[dict[str, object]]]:
         """Render only native-text regions that show broken glyph mappings.
 
@@ -532,7 +593,7 @@ class PdfIngestPipeline:
                             "source_text": region.text,
                             "reason": region.reason,
                             "bbox": [clip.x0, clip.y0, clip.x1, clip.y1],
-                            "image": str(path),
+                            "image": cls._artifact_reference(artifact_root, path),
                         }
                     )
                 manifest[inspected_page.page_number] = items

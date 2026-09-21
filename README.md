@@ -96,6 +96,8 @@ legal-study ingest ".\materials\論文マスター_刑法.pdf" --subject crimina
 - `ocr_crops/`（壊れたUnicode mappingが疑われる箇所だけを450dpiで切り出し）
 - `review_crops/`（赤色vector evidenceをクラスタ化したVision確認用crop）
 
+run内のJSONが参照するrender/cropのpathはrun-relativeなPOSIX形式です。runディレクトリを移動しても、同じディレクトリ構造のままartifactを解決できます。
+
 ## PaddleOCRを追加する
 
 PaddleOCR本体に加えて、使用環境に合うPaddle inference runtimeが必要です。外出先でオフライン利用する場合は、出発前にモデルを一度取得してローカルキャッシュを準備します。

@@ -95,7 +95,7 @@ class PageInspection(BaseModel):
     raw_vector_drawings: list[RawVectorDrawing] = Field(default_factory=list)
     raw_image_regions: list[RawImageRegion] = Field(default_factory=list)
     vector_marks: list[VectorMark] = Field(default_factory=list)
-    rendered_image: Path | None = None
+    rendered_image: str | None = None
     reasons: list[str] = Field(default_factory=list)
 
 

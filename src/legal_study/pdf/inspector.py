@@ -45,12 +45,20 @@ class PdfInspector:
         *,
         pages: Iterable[int] | None = None,
         render_dir: str | Path | None = None,
+        artifact_root: str | Path | None = None,
     ) -> DocumentInspection:
         source_path = Path(source).expanduser().resolve()
         page_filter = set(pages) if pages is not None else None
         output_dir = Path(render_dir).resolve() if render_dir else None
+        artifact_root_path = Path(artifact_root).resolve() if artifact_root else None
         if output_dir:
             output_dir.mkdir(parents=True, exist_ok=True)
+        if (
+            output_dir is not None
+            and artifact_root_path is not None
+            and not output_dir.is_relative_to(artifact_root_path)
+        ):
+            raise ValueError("render_dir must be inside artifact_root")
 
         sha = self._sha256(source_path)
         document = fitz.open(source_path)
@@ -61,7 +69,11 @@ class PdfInspector:
                 page_number = index + 1
                 if page_filter is not None and page_number not in page_filter:
                     continue
-                inspected.append(self._inspect_page(document[index], page_number, output_dir))
+                inspected.append(
+                    self._inspect_page(
+                        document[index], page_number, output_dir, artifact_root_path
+                    )
+                )
         finally:
             document.close()
 
@@ -73,7 +85,11 @@ class PdfInspector:
         )
 
     def _inspect_page(
-        self, page: fitz.Page, page_number: int, output_dir: Path | None
+        self,
+        page: fitz.Page,
+        page_number: int,
+        output_dir: Path | None,
+        artifact_root: Path | None,
     ) -> PageInspection:
         native_text = page.get_text("text", sort=True)
         raw_native = self._raw_native(page)
@@ -120,12 +136,17 @@ class PdfInspector:
         if marks and not annotations:
             reasons.append("flattened_vector_marks_detected")
 
-        rendered = None
+        rendered: str | None = None
         if output_dir is not None:
-            rendered = output_dir / f"page-{page_number:04d}.png"
+            rendered_path = output_dir / f"page-{page_number:04d}.png"
             pix = page.get_pixmap(dpi=self.render_dpi, alpha=False)
-            with atomic_output_path(rendered) as temporary:
+            with atomic_output_path(rendered_path) as temporary:
                 pix.save(temporary)
+            rendered = (
+                rendered_path.relative_to(artifact_root).as_posix()
+                if artifact_root is not None
+                else str(rendered_path)
+            )
 
         return PageInspection(
             page_number=page_number,
