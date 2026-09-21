@@ -4,6 +4,8 @@ import re
 import unicodedata
 
 _JP_RE = re.compile(r"[\u3005-\u3007\u303b\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff]")
+_LOWER_LATIN_TOKEN_RE = re.compile(r"(?<![A-Za-z])[a-z]{2,12}(?![A-Za-z])")
+_EXPECTED_LOWER_TOKENS = frozenset({"rank", "stock", "memo"})
 
 
 def _is_expected_letter_or_number(c: str) -> bool:
@@ -59,3 +61,12 @@ def native_text_quality(text: str) -> float:
 
 def useful_char_count(text: str) -> int:
     return sum(1 for c in text if not c.isspace() and unicodedata.category(c) != "Cc")
+
+
+def suspicious_token_count(text: str) -> int:
+    """Count narrow lowercase-Latin noise tokens in Japanese source text."""
+    return sum(
+        1
+        for match in _LOWER_LATIN_TOKEN_RE.finditer(text)
+        if match.group(0).lower() not in _EXPECTED_LOWER_TOKENS
+    )
