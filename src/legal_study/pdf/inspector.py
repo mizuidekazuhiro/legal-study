@@ -19,10 +19,13 @@ from legal_study.models import (
     RawImageRegion,
     RawVectorDrawing,
     SuspectRegion,
+    TextLayerOrigin,
+    TextLayerTrust,
 )
 from legal_study.pdf.quality import (
     native_text_quality,
     suspicious_char_count,
+    suspicious_token_count,
     useful_char_count,
 )
 from legal_study.pdf.vector_marks import extract_vector_marks
@@ -103,6 +106,8 @@ class PdfInspector:
         native_chars = self._native_chars(page)
         suspect_regions = self._suspect_regions(spans)
         suspicious_count = suspicious_char_count(native_text)
+        suspicious_tokens = suspicious_token_count(native_text)
+        suspicious_ratio = suspicious_count / max(native_count, 1)
         annotations = self._annotations(page)
         drawings = page.get_drawings()
         raw_vector_drawings = self._raw_vector_drawings(drawings)
@@ -115,10 +120,29 @@ class PdfInspector:
             reasons.append(f"native_quality<{self.min_native_quality}")
         if suspicious_count:
             reasons.append(f"suspicious_native_glyphs={suspicious_count}")
+        if suspicious_tokens:
+            reasons.append(f"suspicious_native_tokens={suspicious_tokens}")
         if largest_image_coverage >= 0.80:
             reasons.append("large_raster_background")
 
-        ocr_required = native_count < self.min_native_chars or quality < self.min_native_quality
+        trust, origin = self._text_layer_assessment(
+            native_count=native_count,
+            quality=quality,
+            suspicious_count=suspicious_count,
+            suspicious_tokens=suspicious_tokens,
+            suspicious_ratio=suspicious_ratio,
+            suspect_region_count=len(suspect_regions),
+            largest_image_coverage=largest_image_coverage,
+        )
+        if trust != TextLayerTrust.HIGH:
+            reasons.append(f"text_layer_trust={trust.value}")
+        reasons.append(f"text_layer_origin={origin.value}")
+
+        ocr_required = (
+            native_count < self.min_native_chars
+            or quality < self.min_native_quality
+            or trust == TextLayerTrust.LOW
+        )
         if ocr_required:
             mode = PageMode.OCR_REQUIRED
         elif largest_image_coverage >= 0.20 or len(page.get_images(full=True)) > 0:
@@ -159,6 +183,10 @@ class PdfInspector:
             native_char_count=native_count,
             native_quality_score=quality,
             suspicious_char_count=suspicious_count,
+            suspicious_token_count=suspicious_tokens,
+            suspicious_char_ratio=round(suspicious_ratio, 6),
+            text_layer_trust=trust,
+            text_layer_origin=origin,
             suspect_native_regions=suspect_regions,
             image_coverage=image_coverage,
             largest_image_coverage=largest_image_coverage,
@@ -177,6 +205,52 @@ class PdfInspector:
             rendered_image=rendered,
             reasons=reasons,
         )
+
+    @staticmethod
+    def _text_layer_assessment(
+        *,
+        native_count: int,
+        quality: float,
+        suspicious_count: int,
+        suspicious_tokens: int,
+        suspicious_ratio: float,
+        suspect_region_count: int,
+        largest_image_coverage: float,
+    ) -> tuple[TextLayerTrust, TextLayerOrigin]:
+        """Estimate whether the embedded text layer can be treated as authoritative.
+
+        A searchable scan may expose plenty of text while still carrying a broken
+        OCR/ToUnicode layer.  Character count alone is therefore not a trust signal.
+        """
+        scan_like = largest_image_coverage >= 0.80
+        severe_mapping_noise = (
+            suspicious_ratio >= 0.01
+            or suspicious_count >= 8
+            or suspect_region_count >= 4
+            or suspicious_tokens >= 2
+        )
+        mild_mapping_noise = (
+            suspicious_count > 0
+            or suspicious_tokens > 0
+            or quality < 0.95
+        )
+
+        if native_count == 0:
+            return TextLayerTrust.LOW, (
+                TextLayerOrigin.SCAN_LIKE if scan_like else TextLayerOrigin.UNKNOWN
+            )
+        if scan_like and native_count > 0:
+            return TextLayerTrust.LOW, TextLayerOrigin.SCAN_LIKE
+        if severe_mapping_noise:
+            return (
+                TextLayerTrust.LOW,
+                TextLayerOrigin.EMBEDDED_OCR_OR_CORRUPT_MAPPING_LIKELY,
+            )
+        if mild_mapping_noise:
+            return TextLayerTrust.MEDIUM, TextLayerOrigin.UNKNOWN
+        if quality >= 0.98:
+            return TextLayerTrust.HIGH, TextLayerOrigin.BORN_DIGITAL_LIKELY
+        return TextLayerTrust.MEDIUM, TextLayerOrigin.UNKNOWN
 
     @staticmethod
     def _sha256(path: Path) -> str:
