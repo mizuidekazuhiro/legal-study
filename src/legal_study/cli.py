@@ -194,6 +194,13 @@ def ingest(
         settings=settings,
     )
     result = pipeline.run(snapshot, prepared, pages=parsed_pages)
+    problem_markdown = next(prepared.output_dir.glob("*_problem.md"), None)
+    validation_path = prepared.output_dir / "problem_validation.json"
+    validation = (
+        json.loads(validation_path.read_text(encoding="utf-8"))
+        if validation_path.is_file()
+        else None
+    )
     console.print(
         json.dumps(
             {
@@ -205,6 +212,18 @@ def ingest(
                 "vision_review": [
                     p.page_number for p in result.pages if p.vision_review_recommended
                 ],
+                "problem_markdown": (
+                    problem_markdown.name if problem_markdown is not None else None
+                ),
+                "canonical_source": (
+                    "canonical_source.json"
+                    if (prepared.output_dir / "canonical_source.json").is_file()
+                    else None
+                ),
+                "needs_review_count": (
+                    validation.get("needs_review_count") if validation else None
+                ),
+                "problem_packet_valid": validation.get("valid") if validation else None,
             },
             ensure_ascii=False,
             indent=2,
