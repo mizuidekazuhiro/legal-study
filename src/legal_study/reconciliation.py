@@ -27,6 +27,7 @@ class ReconciliationRecord(BaseModel):
     normalized_native: str | None = None
     normalized_ocr: str | None = None
     similarity: float | None = None
+    coordinate_match: bool | None = None
     selected_source: str | None = None
     status: ReviewStatus
     reason: str
@@ -66,6 +67,44 @@ def _ocr_text(evidence: dict[str, Any]) -> tuple[str | None, float | None]:
         float(confidence) if isinstance(confidence, int | float) else None,
     )
 
+def _rect_overlap_ratio(a: list[float], b: list[float]) -> float:
+    ax0, ay0, ax1, ay1 = (float(value) for value in a)
+    bx0, by0, bx1, by1 = (float(value) for value in b)
+    ix = max(0.0, min(ax1, bx1) - max(ax0, bx0))
+    iy = max(0.0, min(ay1, by1) - max(ay0, by0))
+    intersection = ix * iy
+    area = max((ax1 - ax0) * (ay1 - ay0), 1e-9)
+    return intersection / area
+
+
+def _coordinate_match(evidence: dict[str, Any], target: dict[str, Any]) -> bool | None:
+    native_bbox = target.get("native_bbox")
+    if not isinstance(native_bbox, list) or len(native_bbox) != 4:
+        return None
+    result = evidence.get("result")
+    if not isinstance(result, dict):
+        return False
+    lines = result.get("lines")
+    if not isinstance(lines, list) or not lines:
+        return False
+    for line in lines:
+        if not isinstance(line, dict):
+            continue
+        pdf_bbox = line.get("pdf_bbox")
+        if not isinstance(pdf_bbox, dict):
+            continue
+        candidate = [
+            pdf_bbox.get("x0"),
+            pdf_bbox.get("y0"),
+            pdf_bbox.get("x1"),
+            pdf_bbox.get("y1"),
+        ]
+        if any(value is None for value in candidate):
+            continue
+        if _rect_overlap_ratio(native_bbox, candidate) >= 0.2:
+            return True
+    return False
+
 
 def _record_from_ocr(
     *,
@@ -87,15 +126,21 @@ def _record_from_ocr(
         if norm_native and norm_ocr
         else None
     )
+    coordinate_match = _coordinate_match(evidence, target)
     execution_status = str(evidence.get("status", "unknown"))
 
     if execution_status != "completed":
         status = ReviewStatus.UNRESOLVED
         reason = execution_status
         selected_source = None
-    elif kind == "suspect_native_text" and norm_native and norm_native == norm_ocr:
+    elif (
+        kind == "suspect_native_text"
+        and norm_native
+        and norm_native == norm_ocr
+        and coordinate_match is True
+    ):
         status = ReviewStatus.AUTO_VERIFIED
-        reason = "normalized_native_ocr_exact_match"
+        reason = "normalized_native_ocr_exact_match_with_coordinate_overlap"
         selected_source = "native"
     elif kind == "suspect_native_text":
         status = ReviewStatus.NEEDS_REVIEW
@@ -124,6 +169,7 @@ def _record_from_ocr(
         normalized_native=norm_native or None,
         normalized_ocr=norm_ocr or None,
         similarity=round(similarity, 6) if similarity is not None else None,
+        coordinate_match=coordinate_match,
         selected_source=selected_source,
         status=status,
         reason=reason,
