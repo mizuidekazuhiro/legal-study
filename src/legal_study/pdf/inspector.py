@@ -152,6 +152,7 @@ class PdfInspector:
             page_number=page_number,
             width=page.rect.width,
             height=page.rect.height,
+            rotation=page.rotation,
             native_text=native_text,
             native_char_count=native_count,
             native_quality_score=quality,

@@ -77,6 +77,7 @@ class PageInspection(BaseModel):
     page_number: int
     width: float
     height: float
+    rotation: int = 0
     native_text: str
     native_char_count: int
     native_quality_score: float

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pymupdf
@@ -10,13 +11,20 @@ import pymupdf
 from legal_study.io_utils import atomic_output_path, atomic_write_json, file_sha256
 from legal_study.models import BBox, DocumentInspection
 from legal_study.pdf.inspector import PdfInspector
-from legal_study.pdf.ocr.base import OcrEngine
+from legal_study.pdf.ocr.base import (
+    CoordinateTransform,
+    OcrBackendMetadata,
+    OcrEngine,
+    OcrInputMetadata,
+    OcrResult,
+)
+from legal_study.pdf.ocr.routing import OcrRoutingConfig, routed_image_regions
 from legal_study.pdf.vector_marks import cluster_red_vector_evidence
 from legal_study.run_manifest import PreparedRun, update_manifest_page_count
 from legal_study.source_store import SourceSnapshot, verify_snapshot
 from legal_study.state import RunStateMissingError, RunStateStore
 
-_STEP_VERSION = "1"
+_STEP_VERSION = "2"
 
 
 class PdfIngestPipeline:
@@ -29,22 +37,37 @@ class PdfIngestPipeline:
         *,
         review_crop_dpi: int = 450,
         ocr_crop_dpi: int = 450,
+        image_region_ocr_dpi: int = 300,
+        routing_config: OcrRoutingConfig | None = None,
     ):
-        self.inspector = inspector or PdfInspector()
+        config = routing_config or OcrRoutingConfig(
+            surgical_dpi=ocr_crop_dpi,
+            image_region_dpi=image_region_ocr_dpi,
+        )
+        self.inspector = inspector or PdfInspector(render_dpi=config.full_page_dpi)
         self.ocr_engine = ocr_engine
         self.review_crop_dpi = review_crop_dpi
-        self.ocr_crop_dpi = ocr_crop_dpi
+        self.routing_config = config
 
     def input_config(self) -> dict[str, object]:
         return {
-            "pipeline_version": "1",
+            "pipeline_version": "2",
             "min_native_chars": self.inspector.min_native_chars,
             "min_native_quality": self.inspector.min_native_quality,
             "render_dpi": self.inspector.render_dpi,
             "review_crop_dpi": self.review_crop_dpi,
-            "ocr_crop_dpi": self.ocr_crop_dpi,
+            "ocr_routing": self.routing_config.as_dict(),
             "ocr_engine": self.ocr_engine.name if self.ocr_engine is not None else "none",
+            "ocr_backend": self._backend_metadata(),
         }
+
+    def _backend_metadata(self) -> dict[str, object] | None:
+        if self.ocr_engine is None:
+            return None
+        metadata = getattr(self.ocr_engine, "metadata", None)
+        if isinstance(metadata, OcrBackendMetadata):
+            return metadata.model_dump(mode="json")
+        return None
 
     def run(
         self,
@@ -361,9 +384,12 @@ class PdfIngestPipeline:
                 inspection,
                 out / "ocr_crops",
                 artifact_root=out,
-                dpi=self.ocr_crop_dpi,
             )
-            payload = {"review_crops": review_crops, "ocr_targets": ocr_targets}
+            payload = {
+                "routing_config": self.routing_config.as_dict(),
+                "review_crops": review_crops,
+                "ocr_targets": ocr_targets,
+            }
             atomic_write_json(artifact, payload)
             output_hash = self._crop_bundle_hash(out, artifact, payload)
             assert output_hash is not None
@@ -422,26 +448,41 @@ class PdfIngestPipeline:
         self._archive_step_artifacts(prepared.output_dir, step_name)
         self._begin(state, prepared, step_name, input_hash)
         try:
-            ocr_results: dict[str, object] = {"pages": {}}
-            if self.ocr_engine is not None:
-                for page in inspection.pages:
-                    page_result: dict[str, object] = {}
-                    if page.ocr_recommended and page.rendered_image:
-                        page_result["full_page"] = self.ocr_engine.recognize(
-                            self._resolve_artifact(out, page.rendered_image)
-                        ).model_dump(mode="json")
+            ocr_results: dict[str, object] = {
+                "schema_version": 2,
+                "native_text_replaced": False,
+                "backend": self._backend_metadata(),
+                "routing_config": self.routing_config.as_dict(),
+                "pages": {},
+            }
+            page_results: dict[str, object] = {}
+            for page in inspection.pages:
+                page_result: dict[str, object] = {
+                    "routing": {
+                        "native_text_preserved": True,
+                        "full_page_ocr": page.ocr_recommended,
+                        "surgical_region_count": sum(
+                            target.get("kind") == "suspect_native_text"
+                            for target in ocr_targets.get(page.page_number, [])
+                        ),
+                        "image_region_count": sum(
+                            target.get("kind") == "image_region"
+                            for target in ocr_targets.get(page.page_number, [])
+                        ),
+                    }
+                }
+                if page.ocr_recommended and page.rendered_image:
+                    target = self._full_page_target(page, out)
+                    page_result["full_page"] = self._execute_ocr_target(target, out)
 
-                    region_results: list[dict[str, object]] = []
-                    for target in ocr_targets.get(page.page_number, []):
-                        crop_path = self._resolve_artifact(out, str(target["image"]))
-                        result = self.ocr_engine.recognize(crop_path)
-                        region_results.append(
-                            {**target, "result": result.model_dump(mode="json")}
-                        )
-                    if region_results:
-                        page_result["regions"] = region_results
-                    if page_result:
-                        ocr_results["pages"][str(page.page_number)] = page_result
+                region_results = [
+                    self._execute_ocr_target(target, out)
+                    for target in ocr_targets.get(page.page_number, [])
+                ]
+                if region_results:
+                    page_result["regions"] = region_results
+                page_results[str(page.page_number)] = page_result
+            ocr_results["pages"] = page_results
             atomic_write_json(artifact, ocr_results)
             output_hash = file_sha256(artifact)
             state.complete_step(
@@ -451,6 +492,80 @@ class PdfIngestPipeline:
         except Exception as exc:
             self._fail(state, prepared, step_name, exc)
             raise
+
+    def _execute_ocr_target(
+        self, target: dict[str, object], out: Path
+    ) -> dict[str, object]:
+        evidence: dict[str, object] = {"target": target}
+        if self.ocr_engine is None:
+            evidence["status"] = "not_executed_no_backend"
+            return evidence
+        image_path = self._resolve_artifact(out, str(target["image"]))
+        result = self.ocr_engine.recognize(image_path)
+        enriched = self._attach_input_metadata(result, target)
+        evidence["status"] = "completed"
+        evidence["result"] = enriched.model_dump(mode="json")
+        return evidence
+
+    def _full_page_target(self, page, out: Path) -> dict[str, object]:
+        assert page.rendered_image is not None
+        image_path = self._resolve_artifact(out, page.rendered_image)
+        pixmap = pymupdf.Pixmap(str(image_path))
+        bbox = BBox(x0=0.0, y0=0.0, x1=page.width, y1=page.height)
+        return self._target_metadata(
+            kind="full_page",
+            page_number=page.page_number,
+            image_reference=page.rendered_image,
+            image_path=image_path,
+            image_width=pixmap.width,
+            image_height=pixmap.height,
+            bbox=bbox,
+            dpi=self.inspector.render_dpi,
+            padding=0.0,
+            page_rotation=page.rotation,
+            reason="insufficient_or_low_quality_native_text",
+        )
+
+    def _attach_input_metadata(
+        self, result: OcrResult, target: dict[str, object]
+    ) -> OcrResult:
+        transform = CoordinateTransform.model_validate(target["coordinate_transform"])
+        bbox_values = target["bbox"]
+        assert isinstance(bbox_values, list)
+        input_metadata = OcrInputMetadata(
+            source_kind=str(target["kind"]),
+            page_number=int(target["page_number"]),
+            image=str(target["image"]),
+            image_sha256=str(target["image_sha256"]),
+            dpi=int(target["dpi"]),
+            crop_bbox=BBox(
+                x0=float(bbox_values[0]),
+                y0=float(bbox_values[1]),
+                x1=float(bbox_values[2]),
+                y1=float(bbox_values[3]),
+            ),
+            crop_padding_points=float(target["crop_padding_points"]),
+            preprocessing=dict(target["preprocessing"]),  # type: ignore[arg-type]
+            coordinate_transform=transform,
+        )
+        lines = [
+            line.model_copy(
+                update={"pdf_bbox": transform.map_bbox(line.bbox) if line.bbox else None}
+            )
+            for line in result.lines
+        ]
+        backend = result.backend
+        if backend is None:
+            metadata = getattr(self.ocr_engine, "metadata", None)
+            backend = metadata if isinstance(metadata, OcrBackendMetadata) else None
+        return result.model_copy(
+            update={
+                "backend": backend,
+                "input": input_metadata,
+                "lines": lines,
+                "executed_at": result.executed_at or datetime.now(UTC),
+            }
+        )
 
     def _review_manifest_step(
         self,
@@ -556,32 +671,79 @@ class PdfIngestPipeline:
             document.close()
         return manifest
 
-    @classmethod
+    @staticmethod
+    def _target_metadata(
+        *,
+        kind: str,
+        page_number: int,
+        image_reference: str,
+        image_path: Path,
+        image_width: int,
+        image_height: int,
+        bbox: BBox,
+        dpi: int,
+        padding: float,
+        page_rotation: int,
+        reason: str,
+        extra: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        scale_x = (bbox.x1 - bbox.x0) / image_width
+        scale_y = (bbox.y1 - bbox.y0) / image_height
+        transform = CoordinateTransform(
+            pixel_to_pdf=(scale_x, 0.0, 0.0, scale_y, bbox.x0, bbox.y0),
+            image_width_px=image_width,
+            image_height_px=image_height,
+            pdf_bbox=bbox,
+            page_rotation=page_rotation,
+        )
+        target: dict[str, object] = {
+            "kind": kind,
+            "page_number": page_number,
+            "reason": reason,
+            "bbox": [bbox.x0, bbox.y0, bbox.x1, bbox.y1],
+            "image": image_reference,
+            "image_sha256": file_sha256(image_path),
+            "dpi": dpi,
+            "crop_padding_points": padding,
+            "preprocessing": {
+                "renderer": "PyMuPDF",
+                "colorspace": "rgb",
+                "alpha": False,
+                "deskew": False,
+                "binarization": False,
+                "contrast_adjustment": False,
+            },
+            "coordinate_transform": transform.model_dump(mode="json"),
+        }
+        if extra:
+            target.update(extra)
+        return target
+
     def _render_ocr_targets(
-        cls,
+        self,
         source: str | Path,
         inspection: DocumentInspection,
         crop_dir: Path,
         *,
         artifact_root: Path,
-        dpi: int = 450,
     ) -> dict[int, list[dict[str, object]]]:
-        """Render only native-text regions that show broken glyph mappings.
+        """Render surgical native-text and independently routed image regions.
 
         This is the surgical OCR path. It avoids replacing an otherwise-good PDF
-        text layer merely because a few glyphs are corrupted.
+        text layer merely because a few glyphs are corrupted. Substantive image
+        regions route independently so native page text cannot hide image text.
         """
         crop_dir.mkdir(parents=True, exist_ok=True)
         document = pymupdf.open(source)
         manifest: dict[int, list[dict[str, object]]] = {}
         try:
             for inspected_page in inspection.pages:
-                if not inspected_page.suspect_native_regions:
-                    continue
                 page = document[inspected_page.page_number - 1]
                 items: list[dict[str, object]] = []
                 for index, region in enumerate(inspected_page.suspect_native_regions, start=1):
-                    clip = cls._clip_box(page.rect, region.bbox, padding=6)
+                    padding = self.routing_config.surgical_padding_points
+                    dpi = self.routing_config.surgical_dpi
+                    clip = self._clip_box(page.rect, region.bbox, padding=padding)
                     path = crop_dir / (
                         f"page-{inspected_page.page_number:04d}-suspect-{index:03d}.png"
                     )
@@ -589,15 +751,57 @@ class PdfIngestPipeline:
                     with atomic_output_path(path) as temporary:
                         pixmap.save(temporary)
                     items.append(
-                        {
-                            "kind": "suspect_native_text",
-                            "source_text": region.text,
-                            "reason": region.reason,
-                            "bbox": [clip.x0, clip.y0, clip.x1, clip.y1],
-                            "image": cls._artifact_reference(artifact_root, path),
-                        }
+                        self._target_metadata(
+                            kind="suspect_native_text",
+                            page_number=inspected_page.page_number,
+                            image_reference=self._artifact_reference(artifact_root, path),
+                            image_path=path,
+                            image_width=pixmap.width,
+                            image_height=pixmap.height,
+                            bbox=BBox(x0=clip.x0, y0=clip.y0, x1=clip.x1, y1=clip.y1),
+                            dpi=dpi,
+                            padding=padding,
+                            page_rotation=inspected_page.rotation,
+                            reason=region.reason,
+                            extra={"native_candidate": region.text},
+                        )
                     )
-                manifest[inspected_page.page_number] = items
+
+                for image_region, reason in routed_image_regions(
+                    inspected_page, self.routing_config
+                ):
+                    padding = self.routing_config.image_padding_points
+                    dpi = self.routing_config.image_region_dpi
+                    clip = self._clip_box(page.rect, image_region.bbox, padding=padding)
+                    path = crop_dir / (
+                        f"page-{inspected_page.page_number:04d}-image-"
+                        f"{image_region.image_index:03d}.png"
+                    )
+                    pixmap = page.get_pixmap(dpi=dpi, clip=clip, alpha=False)
+                    with atomic_output_path(path) as temporary:
+                        pixmap.save(temporary)
+                    items.append(
+                        self._target_metadata(
+                            kind="image_region",
+                            page_number=inspected_page.page_number,
+                            image_reference=self._artifact_reference(artifact_root, path),
+                            image_path=path,
+                            image_width=pixmap.width,
+                            image_height=pixmap.height,
+                            bbox=BBox(x0=clip.x0, y0=clip.y0, x1=clip.x1, y1=clip.y1),
+                            dpi=dpi,
+                            padding=padding,
+                            page_rotation=inspected_page.rotation,
+                            reason=reason,
+                            extra={
+                                "image_index": image_region.image_index,
+                                "image_xref": image_region.xref,
+                                "source_image_digest": image_region.digest,
+                            },
+                        )
+                    )
+                if items:
+                    manifest[inspected_page.page_number] = items
         finally:
             document.close()
         return manifest
