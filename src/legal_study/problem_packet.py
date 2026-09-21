@@ -479,6 +479,7 @@ def validate_problem_packet(
         checks["frontmatter_source_sha_matches"] = False
 
     valid = all(checks.values())
+    upload_files = [markdown_path.name, *sorted(set(evidence_refs))]
     return {
         "schema_version": 1,
         "valid": valid,
@@ -486,6 +487,7 @@ def validate_problem_packet(
         "canonical_sha256": file_sha256(run_dir / "canonical_source.json"),
         "markdown_sha256": file_sha256(markdown_path),
         "needs_review_count": len(canonical["needs_review"]),
+        "upload_files": upload_files,
     }
 
 
