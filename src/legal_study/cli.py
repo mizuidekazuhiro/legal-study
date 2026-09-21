@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import importlib.util
 import json
+import platform
 from pathlib import Path
 from typing import Annotated
 
@@ -11,6 +13,8 @@ from rich.table import Table
 from legal_study.pdf.inspector import PdfInspector
 from legal_study.pdf.ocr.paddle import PaddleOcrEngine
 from legal_study.pdf.pipeline import PdfIngestPipeline
+from legal_study.settings import LocalSettings
+from legal_study.workspace import run_dir
 
 app = typer.Typer(no_args_is_help=True)
 console = Console()
@@ -28,6 +32,43 @@ def _parse_pages(value: str | None) -> list[int] | None:
         else:
             pages.add(int(part))
     return sorted(pages)
+
+
+@app.command()
+def init() -> None:
+    """Create the portable local workspace."""
+    settings = LocalSettings()
+    settings.ensure()
+    console.print(f"LEGAL_STUDY_HOME: {settings.home}")
+    console.print(f"runs:   {settings.runs_dir}")
+    console.print(f"cache:  {settings.cache_dir}")
+    console.print(f"models: {settings.models_dir}")
+    console.print("Initialized.")
+
+
+@app.command()
+def doctor() -> None:
+    """Check whether the core local-only PDF pipeline can run."""
+    settings = LocalSettings()
+    settings.ensure()
+    checks = {
+        "Python": platform.python_version(),
+        "Platform": platform.platform(),
+        "Workspace": str(settings.home),
+        "PyMuPDF": "OK" if importlib.util.find_spec("fitz") else "MISSING",
+        "Pillow": "OK" if importlib.util.find_spec("PIL") else "MISSING",
+        "PaddleOCR": (
+            "installed" if importlib.util.find_spec("paddleocr") else "optional/not installed"
+        ),
+    }
+    table = Table("Check", "Value")
+    for key, value in checks.items():
+        table.add_row(key, value)
+    console.print(table)
+    console.print(
+        "Core inspect/ingest works locally without cloud services. "
+        "PaddleOCR is optional and may require a separate Paddle runtime."
+    )
 
 
 @app.command()
@@ -62,9 +103,16 @@ def inspect(
 @app.command()
 def ingest(
     pdf: Annotated[Path, typer.Argument(exists=True, readable=True)],
-    output_dir: Annotated[Path, typer.Option("--output", "-o")],
+    output_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--output", "-o", help="Optional; defaults to the portable local workspace."
+        ),
+    ] = None,
     pages: Annotated[str | None, typer.Option(help="1-based pages, e.g. 110-116")] = None,
     ocr: Annotated[str, typer.Option(help="none|paddle")] = "none",
+    subject: Annotated[str, typer.Option(help="Used for default run directory")] = "unknown",
+    question: Annotated[str, typer.Option(help="Used for default run directory")] = "adhoc",
 ) -> None:
     engine = None
     if ocr == "paddle":
@@ -72,12 +120,16 @@ def ingest(
     elif ocr != "none":
         raise typer.BadParameter("ocr must be 'none' or 'paddle'")
 
+    resolved_output = output_dir or run_dir(
+        subject=subject, question=question, source=pdf.resolve()
+    )
     result = PdfIngestPipeline(ocr_engine=engine).run(
-        pdf, output_dir, pages=_parse_pages(pages)
+        pdf, resolved_output, pages=_parse_pages(pages)
     )
     console.print(
         json.dumps(
             {
+                "output_dir": str(resolved_output),
                 "pages": len(result.pages),
                 "ocr_recommended": [p.page_number for p in result.pages if p.ocr_recommended],
                 "vision_review": [
