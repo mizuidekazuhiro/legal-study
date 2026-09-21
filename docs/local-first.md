@@ -2,7 +2,7 @@
 
 ## Goal
 
-The core PDF pipeline must work on a CPU-only Windows laptop away from home without depending on a fixed drive letter, a mounted cloud drive, or an online service. GPU execution is an optional optimization.
+The core PDF pipeline must work on a CPU-only Windows laptop away from home without depending on a fixed drive letter, a mounted cloud drive, or an online service. The current PaddleOCR adapter explicitly uses CPU; GPU execution is a future optional optimization.
 
 The local terminal artifact is a high-trust problem Markdown packet for manual upload to a ChatGPT Project.
 
@@ -42,7 +42,11 @@ No output directory is required; the run can default below LEGAL_STUDY_HOME/runs
 
 After packages are installed, native PDF text/coordinates, annotation extraction, flattened vector mark extraction, page rendering, bad-Unicode detection, surgical OCR crop generation, review manifest generation, and local validation are designed to run locally.
 
-PaddleOCR model/runtime availability is machine-dependent. Pre-download/cache the required model files before travel if offline OCR will be needed.
+PaddleOCR model/runtime availability is machine-dependent. Install the `ocr` extra,
+run `legal-study warmup-ocr` once while online, then run `legal-study doctor --ocr`.
+The warmup stores and hashes PP-OCRv6 models below `models/paddleocr/`. Offline ingest
+uses explicit local model directories and refuses to run if the manifest/model hashes
+do not match; it does not silently start a download.
 
 LLM/Vision review is a later local evidence stage. A run may stop before it and resume later. Drive, Notion, Obsidian, and Anki writes are outside the current implementation scope.
 
@@ -52,7 +56,8 @@ LLM/Vision review is a later local evidence stage. A run may stop before it and 
 2. Run scripts/bootstrap.ps1.
 3. Run legal-study init and legal-study doctor.
 4. Keep needed source PDFs available offline.
-5. Pre-warm OCR models before leaving a reliable connection.
+5. Run `legal-study warmup-ocr`, then verify `legal-study doctor --ocr` reports READY
+   before leaving a reliable connection.
 6. Perform PDF inspection/ingest locally while travelling.
 7. Upload the completed problem Markdown and only the required evidence PNGs to ChatGPT Project.
 
@@ -60,4 +65,8 @@ LLM/Vision review is a later local evidence stage. A run may stop before it and 
 
 The code is separated so local Codex can adjust modules independently: source_store.py for immutable inputs, run_manifest.py for run identity, state/ for SQLite resume, pdf/inspector.py for routing, pdf/vector_marks.py for PDF drawing evidence, pdf/ocr for OCR adapters, and pdf/pipeline.py for artifact orchestration.
 
-Raw native character geometry, annotation data, vector drawings, and image-region metadata are retained as evidence. Run artifact references are relative, so a complete run directory can move without embedding its former checkout or output location. Native/OCR/Vision reconciliation remains a later step.
+Raw native character geometry, annotation data, vector drawings, image-region metadata,
+and OCR results remain separate Evidence. OCR inputs include run-relative artifact path,
+image hash, DPI, crop/padding, preprocessing, and pixel-to-PDF coordinate transform.
+A complete run directory can move without embedding its former checkout or output
+location. Native/OCR/Vision reconciliation remains a later step.

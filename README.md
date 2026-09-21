@@ -6,7 +6,7 @@
 
 ## ローカルファースト
 
-外出先のCPU-only Windows PCでも動かせるよう、コア処理はクラウドサービス、固定ドライブ文字、特定checkout先に依存しません。PDFがローカルにあれば、source snapshot・検査・レンダリング・vector mark検出・OCR対象抽出・ローカル保存まで単体で動作します。GPUは任意の高速化手段です。
+外出先のCPU-only Windows PCでも動かせるよう、コア処理はクラウドサービス、固定ドライブ文字、特定checkout先に依存しません。PDFがローカルにあれば、source snapshot・検査・レンダリング・vector mark検出・OCR対象抽出・ローカル保存まで単体で動作します。P1-BのPaddleOCR backendはCPUを明示指定し、GPU対応は将来の任意最適化です。
 
 可変データは標準で `~/.legal-study/` 配下に置きます。別の場所を使う場合は `LEGAL_STUDY_HOME` を設定してください。詳細は [`docs/local-first.md`](docs/local-first.md) を参照してください。
 
@@ -42,7 +42,7 @@ PDF
           ↓
     page quality gate
           ↓
-   OCR only when needed
+   full-page / image-region / surgical OCR only when needed
           ↓
   Vision review manifest
           ↓
@@ -93,21 +93,24 @@ legal-study ingest ".\materials\論文マスター_刑法.pdf" --subject crimina
 - `review_manifest.json`
 - `ocr.json`
 - `renders/page-XXXX.png`
-- `ocr_crops/`（壊れたUnicode mappingが疑われる箇所だけを450dpiで切り出し）
+- `ocr_crops/`（壊れたUnicode mappingのsurgical cropと、独立判定した画像領域）
 - `review_crops/`（赤色vector evidenceをクラスタ化したVision確認用crop）
 
 run内のJSONが参照するrender/cropのpathはrun-relativeなPOSIX形式です。runディレクトリを移動しても、同じディレクトリ構造のままartifactを解決できます。
 
 ## PaddleOCRを追加する
 
-PaddleOCR本体に加えて、使用環境に合うPaddle inference runtimeが必要です。外出先でオフライン利用する場合は、出発前にモデルを一度取得してローカルキャッシュを準備します。
+PaddleOCR本体とCPU版PaddlePaddle runtimeをインストールし、オンライン環境で一度だけ明示的にモデルを取得します。モデルは `~/.legal-study/models/paddleocr/` に保存され、manifestのhashと実体が一致した場合だけ通常ingestで利用されます。`ingest --ocr paddle`が暗黙にdownloadを始めることはありません。
 
 ```powershell
 pip install -e .[ocr]
-legal-study ingest ".\materials\source.pdf" --subject criminal --question sample --pages 1-5 --ocr paddle
+legal-study warmup-ocr
+legal-study doctor --ocr
+legal-study ingest ".\materials\source.pdf" --subject criminal --question sample --pages 1-5 --ocr paddle `
+  --full-page-dpi 300 --image-region-dpi 300 --surgical-dpi 450
 ```
 
-v0.1ではPaddleOCRは `PP-OCRv6` / `lang="japan"` を明示して使います。モデルの自動更新で認識挙動が変わらないよう、後続版でモデル名・runtime versionもrun manifestへ固定します。
+v0.1ではPaddleOCR 3.7系、`PP-OCRv6` / `lang="japan"`、medium detection/recognition modelをCPUで使います。engine/library/runtime version、model名・hash、device、実行日時、DPI、crop bbox/padding、前処理、画像hash、pixel→PDF座標transformをartifactとrun inputへ保存します。DPIは300/450/600を選択でき、初期値はfull page/image region=300、surgical=450です。
 
 ## 重要な安全設計
 
@@ -115,8 +118,10 @@ v0.1ではPaddleOCRは `PP-OCRv6` / `lang="japan"` を明示して使います�
 - 元PDFをcontent-addressed storeへsnapshot後、全解析をsnapshotだけから実行。
 - run input hash、step status、input/output hash、retry、error、versionをSQLiteに保存。
 - JSON・render・cropをatomicに公開し、hash不一致の旧artifactは削除せず`orphans/`へ退避。
-- OCRは「native textが不足/低品質」のページに限定。
+- full-page OCRは「native textが不足/低品質」のページに限定。
+- ページに十分なnative textがあっても、独立したsubstantive image regionはOCR対象にできる。
 - 壊れたUnicode mappingはページ全体ではなく該当spanを**surgical OCR**対象にする。
+- OCR結果は常に別Evidenceとして保存し、native textを置換しない。
 - マーカー色から法的役割を自動推測しない。
 - 赤ペンを「修正」と決め打ちしない。
 - Vision確認が必要なページを明示的に残す。
@@ -125,11 +130,10 @@ v0.1ではPaddleOCRは `PP-OCRv6` / `lang="japan"` を明示して使います�
 
 ## 次の実装
 
-1. raw annotation / vector / image evidenceのlossless保存
-2. native text / PaddleOCR / Vision evidenceの差分照合
-3. `needs_review`とevidence PNGの生成
-4. マーカー開始文字・終了文字の厳密確定
-5. `canonical_source.json` の生成
-6. `<subject>_<question>_problem.md` の生成
+1. native text / PaddleOCR / Vision evidenceの差分照合
+2. `needs_review`と必要最小限のevidence PNGの生成
+3. マーカー開始文字・終了文字の厳密確定
+4. `canonical_source.json` の生成
+5. `<subject>_<question>_problem.md` の生成
 
 最終調整はローカルCodexで行いやすいよう、各処理を独立モジュールに分割してあります。

@@ -60,16 +60,25 @@ a reading mark, a circle/box, etc.
 
 Some pages have a mostly useful native text layer but a minority of glyphs map to
 unrelated Unicode scripts. Re-OCRing the whole page would discard higher-quality
-native text. Instead, suspicious spans are located by PDF coordinates, rendered at
-450 dpi, and queued as region-level OCR targets. This mirrors the selective/surgical
-OCR direction used by modern document parsers.
+native text. Instead, suspicious spans are located by PDF coordinates and queued as
+region-level OCR targets. The default crop is 450 dpi; 300/450/600 dpi are selectable
+for comparison. Substantive embedded image regions are routed independently of the
+page's native character count, with a 300 dpi default. Thus a normal native-text page
+can retain its text and still collect OCR Evidence from a pasted slide or diagram.
 
 ## OCR backends
 
-The first optional adapter is PaddleOCR 3.x. It is selected because current PaddleOCR
-models explicitly support Japanese and difficult scenarios including handwriting and
-vertical text. The adapter is optional because local model/runtime installation is
-machine-dependent.
+The first optional adapter is PaddleOCR 3.7.x with PaddlePaddle 3.2+ and PP-OCRv6
+Japanese medium detection/recognition models. It explicitly uses `device="cpu"`.
+`legal-study warmup-ocr` is the only model-download path; normal ingest first validates
+the local manifest, directories, and hashes below `~/.legal-study/models/paddleocr/`
+and fails closed if anything is missing or changed. `legal-study doctor --ocr` performs
+the same readiness check without importing the inference pipeline or using network.
+
+Each OCR result records engine/library/runtime versions, model version/names/hashes,
+device, execution time, image hash, DPI, crop/padding, preprocessing flags, OCR pixel
+bboxes/polygons, and an affine pixel-to-PDF transform. OCR and native evidence remain
+separate; confidence alone never promotes OCR to canonical text.
 
 Future adapters can include:
 
@@ -88,9 +97,10 @@ quality, geometry, and later Vision review are preserved separately.
 - `renders/page-NNNN.png`: high-resolution page evidence.
 - `inspection.json`: text, spans, images, annotations, vector marks, and page mode.
 - `evidence_crops.json`: crop inventory used by resumable downstream steps.
-- `ocr.json`: OCR results only for pages/regions where OCR was requested.
+- `ocr.json`: routing decisions and separate OCR Evidence; it explicitly records that
+  native text was not replaced.
 - `review_manifest.json`: compact list of pages/regions that still require review.
-- `ocr_crops/`: surgical OCR crops for suspicious native spans.
+- `ocr_crops/`: surgical OCR crops and independently routed image-region crops.
 - `review_crops/`: red vector-evidence clusters for semantic Vision review.
 
 All render and crop references stored inside run JSON are POSIX-style paths relative
