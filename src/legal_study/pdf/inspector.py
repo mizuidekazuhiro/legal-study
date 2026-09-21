@@ -227,7 +227,7 @@ class PdfInspector:
             suspicious_ratio >= 0.01
             or suspicious_count >= 8
             or suspect_region_count >= 4
-            or suspicious_tokens >= 2
+            or suspicious_tokens >= 1
         )
         mild_mapping_noise = (
             suspicious_count > 0
@@ -402,15 +402,22 @@ class PdfInspector:
     def _suspect_regions(spans: list[NativeSpan]) -> list[SuspectRegion]:
         regions: list[SuspectRegion] = []
         for span in spans:
-            count = suspicious_char_count(span.text)
-            if count:
-                regions.append(
-                    SuspectRegion(
-                        text=span.text,
-                        bbox=span.bbox,
-                        reason=f"suspicious_glyphs={count}",
-                    )
+            glyph_count = suspicious_char_count(span.text)
+            token_count = suspicious_token_count(span.text)
+            if not glyph_count and not token_count:
+                continue
+            reasons: list[str] = []
+            if glyph_count:
+                reasons.append(f"suspicious_glyphs={glyph_count}")
+            if token_count:
+                reasons.append(f"suspicious_tokens={token_count}")
+            regions.append(
+                SuspectRegion(
+                    text=span.text,
+                    bbox=span.bbox,
+                    reason=";".join(reasons),
                 )
+            )
         return regions
 
     @staticmethod
