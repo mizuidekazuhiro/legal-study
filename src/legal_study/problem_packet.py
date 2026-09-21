@@ -628,6 +628,46 @@ def validate_problem_packet(
         and canonical_pages[page.page_number].get("text_layer_origin")
         for page in inspection.pages
     )
+    repair_payload = canonical.get("repair", {})
+    checks["repair_source_sha_matches"] = (
+        isinstance(repair_payload, dict)
+        and repair_payload.get("source_sha256") == manifest.source.sha256
+    )
+    auto_repairs_safe = True
+    low_trust_auto_repairs_corroborated = True
+    protected_never_auto = True
+    if isinstance(repair_payload, dict):
+        for repair_page in repair_payload.get("pages", []):
+            if not isinstance(repair_page, dict):
+                auto_repairs_safe = False
+                continue
+            trust = repair_page.get("text_layer_trust")
+            for decision in repair_page.get("decisions", []):
+                if not isinstance(decision, dict):
+                    auto_repairs_safe = False
+                    continue
+                if decision.get("status") != "AUTO_REPAIRED":
+                    continue
+                auto_repairs_safe = auto_repairs_safe and bool(
+                    decision.get("source_record_id")
+                    and decision.get("native_original")
+                    and decision.get("ocr_original")
+                    and decision.get("repair_candidate")
+                    and decision.get("coordinate_match") is True
+                )
+                protected_never_auto = protected_never_auto and not bool(
+                    decision.get("protected_content")
+                )
+                if trust == "low":
+                    low_trust_auto_repairs_corroborated = (
+                        low_trust_auto_repairs_corroborated
+                        and decision.get("full_page_support") is True
+                    )
+    checks["auto_repairs_have_provenance"] = auto_repairs_safe
+    checks["protected_content_never_auto_repaired"] = protected_never_auto
+    checks["low_trust_auto_repairs_have_full_page_support"] = (
+        low_trust_auto_repairs_corroborated
+    )
     checks["ocr_supplements_present"] = all(
         str(item["text"]).rstrip() in markdown
         for item in canonical["ocr_supplements"]
