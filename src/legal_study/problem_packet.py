@@ -23,18 +23,57 @@ def _bbox_values(box: BBox) -> list[float]:
 
 
 def _iter_native_chars(page: PageInspection) -> list[dict[str, Any]]:
-    return [
-        {
-            "index": item.index,
-            "char": item.char,
-            "bbox": _bbox_values(item.bbox),
-            "block": item.block,
-            "line": item.line,
-            "span": item.span,
-            "char_in_span": item.char_in_span,
-        }
-        for item in page.native_chars
-    ]
+    if page.native_chars:
+        return [
+            {
+                "index": item.index,
+                "char": item.char,
+                "bbox": _bbox_values(item.bbox),
+                "block": item.block,
+                "line": item.line,
+                "span": item.span,
+                "char_in_span": item.char_in_span,
+            }
+            for item in page.native_chars
+        ]
+
+    # P1-B inspection artifacts predate the explicit reading-order native_chars
+    # field. Preserve resume compatibility by recovering character geometry from
+    # raw_native rather than forcing a 20-minute OCR rerun. The fallback order is
+    # geometric and is used only for marker-boundary indexing.
+    recovered: list[dict[str, Any]] = []
+    blocks = page.raw_native.get("blocks", [])
+    if not isinstance(blocks, list):
+        return recovered
+    for block_index, block in enumerate(blocks):
+        if not isinstance(block, dict):
+            continue
+        for line_index, line in enumerate(block.get("lines", [])):
+            if not isinstance(line, dict):
+                continue
+            for span_index, span in enumerate(line.get("spans", [])):
+                if not isinstance(span, dict):
+                    continue
+                for char_index, char in enumerate(span.get("chars", [])):
+                    if not isinstance(char, dict):
+                        continue
+                    value = char.get("c")
+                    bbox = char.get("bbox")
+                    if isinstance(value, str) and isinstance(bbox, list) and len(bbox) == 4:
+                        recovered.append(
+                            {
+                                "char": value,
+                                "bbox": [float(item) for item in bbox],
+                                "block": block_index,
+                                "line": line_index,
+                                "span": span_index,
+                                "char_in_span": char_index,
+                            }
+                        )
+    recovered.sort(key=lambda item: (round(item["bbox"][1], 1), item["bbox"][0]))
+    for index, item in enumerate(recovered):
+        item["index"] = index
+    return recovered
 
 
 def _intersects_marker(char_bbox: list[float], mark: VectorMark) -> bool:
