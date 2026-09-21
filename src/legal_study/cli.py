@@ -10,6 +10,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from legal_study.finalize import finalize_existing_run
 from legal_study.io_utils import atomic_write_text
 from legal_study.pdf.inspector import PdfInspector
 from legal_study.pdf.ocr.paddle import (
@@ -137,6 +138,18 @@ def inspect(
         )
     console.print(table)
     console.print(f"SHA256: {result.sha256}")
+
+
+@app.command()
+def finalize(
+    run_dir: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=False, readable=True),
+    ],
+) -> None:
+    """Create reconciliation/canonical/problem Markdown from an existing P1-B run."""
+    result = finalize_existing_run(run_dir)
+    console.print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 @app.command()
