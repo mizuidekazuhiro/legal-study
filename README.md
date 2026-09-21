@@ -21,7 +21,10 @@ PDF
   → immutable source snapshot
   → raw native / annotation / vector / image evidence
   → selective / surgical OCR
+  → text-layer trust判定（born-digital / scan-like / corrupt mapping）
+  → low-trust pageの独立full-page OCR
   → native / OCR evidence reconciliation
+  → provenance付きcontextual repair
   → needs_review抽出
   → canonical_source.json
   → <subject>_<question>_problem.md
@@ -95,6 +98,7 @@ legal-study ingest ".\materials\論文マスター_刑法.pdf" --subject crimina
 - `review_manifest.json`
 - `ocr.json`
 - `reconciliation.json`
+- `repair.json`（embedded text / OCR / 修復後text / 修復理由）
 - `canonical_source.json`
 - `<subject>_<question>_problem.md`
 - `problem_validation.json`
@@ -152,3 +156,12 @@ P1-Cではnative/OCR evidenceを保守的に照合し、`AUTO_VERIFIED / NEEDS_R
 `canonical_source.json`は個々のmarker fragmentを`markers`へ保持したまま、安全に連続性を確認できた同色・同一行のfragmentだけを`logical_markers`へ統合します。`problem.md`はlogical markerを表示し、構成元marker IDとraw vector IDをprovenanceとして残します。OCR Supplementsにはfull-page/image-region OCRだけを載せ、surgical OCRはreconciliation evidenceとして保持します。
 
 最終調整はローカルCodexで行いやすいよう、各処理を独立モジュールに分割してあります。
+
+
+## Searchable scan / broken text-layer policy
+
+検索可能PDFのtext layerは、原本テキストではなくスキャナ/OCR由来の場合があります。文字数が十分でも、異常Unicode、別スクリプトへの誤mapping、短いlowercase helper token等が一定量あるページはlow-trustとして扱い、独立full-page OCRを実行します。
+
+修復は自由作文ではありません。embedded text・surgical OCR・座標対応・full-page OCRの相互一致がある非数値/non-citation領域だけを`AUTO_REPAIRED`にし、条文番号、年月日、判例引用、数字を含む候補、曖昧な差分は`REVIEW_REQUIRED`のまま残します。元のembedded textとOCR evidenceは削除せず、`repair.json`へprovenance付きで保持します。
+
+`problem.md`の主本文は`reconciled_text`です。監査用のembedded textも別sectionに保持します。
