@@ -162,3 +162,13 @@ def test_exact_text_with_coordinate_mismatch_requires_review() -> None:
 
     assert result.records[0].coordinate_match is False
     assert result.records[0].status == ReviewStatus.NEEDS_REVIEW
+
+
+def test_surgical_native_contained_in_ocr_can_auto_verify_with_geometry() -> None:
+    evidence = _evidence("suspect_native_text", "甲は乙", "前文 甲は乙 後文")
+    ocr = {"pages": {"1": {"regions": [evidence]}}}
+
+    result = build_reconciliation(_inspection(), ocr, {"pages": []})
+
+    assert result.records[0].status == ReviewStatus.AUTO_VERIFIED
+    assert result.records[0].reason.startswith("normalized_native_contained_in_ocr")
