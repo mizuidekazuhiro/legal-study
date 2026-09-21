@@ -21,7 +21,7 @@ def test_doctor_ocr_reports_offline_readiness_without_warmup(
 
     result = runner.invoke(cli.app, ["doctor", "--ocr"])
 
-    assert result.exit_code == 0
+    assert result.exit_code == 1
     assert calls == [(tmp_path / "home" / "models" / "paddleocr").resolve()]
     assert "NOT READY" in result.stdout
 

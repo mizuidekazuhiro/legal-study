@@ -91,6 +91,7 @@ def doctor(
                 "Offline PaddleOCR: NOT READY. Install the OCR extra and run "
                 "`legal-study warmup-ocr` once while online."
             )
+            raise typer.Exit(code=1)
 
 
 @app.command("warmup-ocr")
