@@ -195,3 +195,13 @@ legal-study seed-ocr-cache "C:\\Users\\<user>\\.legal-study\\runs\\<completed-ru
 `needs_review`はraw evidence件数をそのまま並べず、原則として**1 PDF page = 1 review task**へ統合します。text repair、OCR-only image、marker boundary、red vectorなどの個別論点はtask内の`issues`へ保持し、それぞれに`review_category`を付けます。したがって、人が確認する単位はページ単位ですが、reconciliation / repair / markerの粒度とprovenanceは失われません。
 
 ChatGPTへ渡す画像も原則1ページ1枚の`handoff_review/page-XXXX-review.png`へ圧縮します。full-page renderを中心に、そのページで追加確認が必要なcropをreview sheetへまとめます。`problem_validation.json`の`review_issue_count`はrawな未確定論点数、`needs_review_count`はページ単位task数です。
+
+
+講義後にPDFが更新されたら、いきなりOCRを回す前に旧runとのページ対応を確認できます。
+
+```powershell
+legal-study diff-source ".\\materials\\論文マスター_刑法.pdf" `
+  --against-run "C:\\Users\\<user>\\.legal-study\\runs\\<completed-run>"
+```
+
+`requested_page_alignment`には旧問題ページが新版の何ページへ移動したか、`safe_for_base_ocr_reuse_pages`には本文OCRを安全に再利用できる新版ページが出ます。ページ挿入やマーカー追加があっても問題番号の手作業追跡を減らすためのshadow checkです。
