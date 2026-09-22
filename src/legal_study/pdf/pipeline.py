@@ -5,6 +5,7 @@ import json
 import os
 from datetime import UTC, datetime
 from pathlib import Path
+from time import perf_counter
 
 import pymupdf
 
@@ -28,8 +29,10 @@ from legal_study.source_store import SourceSnapshot, verify_snapshot
 from legal_study.state import RunStateMissingError, RunStateStore
 
 _STEP_VERSION = "2"
+_OCR_STEP_VERSION = "3"
+_OCR_CHECKPOINT_SCHEMA_VERSION = 1
 _RECONCILIATION_STEP_VERSION = "3"
-_REPAIR_STEP_VERSION = "1"
+_REPAIR_STEP_VERSION = "2"
 _PROBLEM_PACKET_STEP_VERSION = "4"
 
 
@@ -491,21 +494,58 @@ class PdfIngestPipeline:
             step_name,
             file_sha256(out / "evidence_crops.json"),
         )
-        if self._artifact_is_resumable(state, prepared, step_name, input_hash, artifact):
+        if artifact.is_file() and state.can_resume(
+            prepared.manifest.run_id,
+            step_name,
+            input_hash=input_hash,
+            version=_OCR_STEP_VERSION,
+            output_hash=file_sha256(artifact),
+        ):
             return file_sha256(artifact)
 
         self._archive_step_artifacts(prepared.output_dir, step_name)
-        self._begin(state, prepared, step_name, input_hash)
+        self._begin(
+            state,
+            prepared,
+            step_name,
+            input_hash,
+            version=_OCR_STEP_VERSION,
+        )
         try:
+            page_targets: dict[int, tuple[dict[str, object] | None, list[dict[str, object]]]] = {}
+            total_targets = 0
+            for page in inspection.pages:
+                full_page_target = (
+                    self._full_page_target(page, out)
+                    if page.ocr_recommended and page.rendered_image
+                    else None
+                )
+                region_targets = list(ocr_targets.get(page.page_number, []))
+                page_targets[page.page_number] = (full_page_target, region_targets)
+                total_targets += (1 if full_page_target is not None else 0) + len(
+                    region_targets
+                )
+
             ocr_results: dict[str, object] = {
-                "schema_version": 3,
+                "schema_version": 4,
                 "native_text_replaced": False,
                 "backend": self._backend_metadata(),
                 "routing_config": self.routing_config.as_dict(),
+                "checkpoint": {
+                    "schema_version": _OCR_CHECKPOINT_SCHEMA_VERSION,
+                    "total_targets": total_targets,
+                    "reused_targets": 0,
+                    "executed_targets": 0,
+                },
                 "pages": {},
             }
             page_results: dict[str, object] = {}
+            current_target = 0
+            reused_targets = 0
+            executed_targets = 0
+
             for page in inspection.pages:
+                full_page_target, region_targets = page_targets[page.page_number]
                 page_result: dict[str, object] = {
                     "routing": {
                         "native_text_preserved": True,
@@ -514,25 +554,49 @@ class PdfIngestPipeline:
                         "full_page_ocr": page.ocr_recommended,
                         "surgical_region_count": sum(
                             target.get("kind") == "suspect_native_text"
-                            for target in ocr_targets.get(page.page_number, [])
+                            for target in region_targets
                         ),
                         "image_region_count": sum(
                             target.get("kind") == "image_region"
-                            for target in ocr_targets.get(page.page_number, [])
+                            for target in region_targets
                         ),
                     }
                 }
-                if page.ocr_recommended and page.rendered_image:
-                    target = self._full_page_target(page, out)
-                    page_result["full_page"] = self._execute_ocr_target(target, out)
 
-                region_results = [
-                    self._execute_ocr_target(target, out)
-                    for target in ocr_targets.get(page.page_number, [])
-                ]
+                if full_page_target is not None:
+                    current_target += 1
+                    evidence, reused = self._execute_ocr_target_checkpointed(
+                        prepared,
+                        full_page_target,
+                        out,
+                        current=current_target,
+                        total=total_targets,
+                    )
+                    page_result["full_page"] = evidence
+                    reused_targets += int(reused)
+                    executed_targets += int(not reused)
+
+                region_results: list[dict[str, object]] = []
+                for target in region_targets:
+                    current_target += 1
+                    evidence, reused = self._execute_ocr_target_checkpointed(
+                        prepared,
+                        target,
+                        out,
+                        current=current_target,
+                        total=total_targets,
+                    )
+                    region_results.append(evidence)
+                    reused_targets += int(reused)
+                    executed_targets += int(not reused)
                 if region_results:
                     page_result["regions"] = region_results
                 page_results[str(page.page_number)] = page_result
+
+            checkpoint_summary = ocr_results["checkpoint"]
+            assert isinstance(checkpoint_summary, dict)
+            checkpoint_summary["reused_targets"] = reused_targets
+            checkpoint_summary["executed_targets"] = executed_targets
             ocr_results["pages"] = page_results
             atomic_write_json(artifact, ocr_results)
             output_hash = file_sha256(artifact)
@@ -557,6 +621,151 @@ class PdfIngestPipeline:
         evidence["status"] = "completed"
         evidence["result"] = enriched.model_dump(mode="json")
         return evidence
+
+    def _ocr_checkpoint_identity(
+        self,
+        prepared: PreparedRun,
+        target: dict[str, object],
+        out: Path,
+    ) -> tuple[str, dict[str, object]]:
+        image_reference = str(target.get("image", ""))
+        image_path = self._resolve_artifact(out, image_reference)
+        if not image_path.is_file():
+            raise FileNotFoundError(f"OCR target image is missing: {image_reference}")
+        actual_image_sha = file_sha256(image_path)
+        declared_image_sha = str(target.get("image_sha256", ""))
+        if not declared_image_sha or actual_image_sha != declared_image_sha:
+            raise RuntimeError(
+                "OCR target image SHA mismatch: "
+                f"{image_reference} declared={declared_image_sha} actual={actual_image_sha}"
+            )
+
+        backend = self._backend_metadata()
+        identity: dict[str, object] = {
+            "source_sha256": prepared.manifest.source.sha256,
+            "target": target,
+            "ocr_engine": self.ocr_engine.name if self.ocr_engine is not None else "none",
+            "backend": backend,
+        }
+        encoded = json.dumps(
+            identity, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest(), identity
+
+    def _ocr_checkpoint_path(self, out: Path, checkpoint_hash: str) -> Path:
+        if len(checkpoint_hash) != 64 or any(
+            char not in "0123456789abcdef" for char in checkpoint_hash
+        ):
+            raise ValueError("Invalid OCR checkpoint hash")
+        checkpoint_dir = (out / "ocr_checkpoints").resolve()
+        resolved_out = out.resolve()
+        if not checkpoint_dir.is_relative_to(resolved_out):
+            raise ValueError("OCR checkpoint directory escapes the run")
+        return checkpoint_dir / f"{checkpoint_hash}.json"
+
+    def _load_ocr_checkpoint(
+        self,
+        *,
+        out: Path,
+        checkpoint_hash: str,
+        identity: dict[str, object],
+        target: dict[str, object],
+    ) -> dict[str, object] | None:
+        path = self._ocr_checkpoint_path(out, checkpoint_hash)
+        if not path.is_file():
+            return None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                return None
+            if payload.get("schema_version") != _OCR_CHECKPOINT_SCHEMA_VERSION:
+                return None
+            if payload.get("checkpoint_hash") != checkpoint_hash:
+                return None
+            if payload.get("identity") != identity:
+                return None
+            evidence = payload.get("evidence")
+            if not isinstance(evidence, dict) or evidence.get("target") != target:
+                return None
+            status = evidence.get("status")
+            if status == "completed":
+                result = evidence.get("result")
+                if not isinstance(result, dict):
+                    return None
+                OcrResult.model_validate(result)
+            elif status != "not_executed_no_backend":
+                return None
+            return evidence
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            return None
+
+    def _write_ocr_checkpoint(
+        self,
+        *,
+        out: Path,
+        checkpoint_hash: str,
+        identity: dict[str, object],
+        evidence: dict[str, object],
+    ) -> None:
+        path = self._ocr_checkpoint_path(out, checkpoint_hash)
+        atomic_write_json(
+            path,
+            {
+                "schema_version": _OCR_CHECKPOINT_SCHEMA_VERSION,
+                "checkpoint_hash": checkpoint_hash,
+                "identity": identity,
+                "evidence": evidence,
+            },
+        )
+
+    @staticmethod
+    def _ocr_target_label(target: dict[str, object]) -> str:
+        page_number = int(target.get("page_number", 0))
+        kind = str(target.get("kind", "unknown"))
+        image = Path(str(target.get("image", "target"))).stem
+        return f"p{page_number:04d}-{kind}-{image}"
+
+    def _execute_ocr_target_checkpointed(
+        self,
+        prepared: PreparedRun,
+        target: dict[str, object],
+        out: Path,
+        *,
+        current: int,
+        total: int,
+    ) -> tuple[dict[str, object], bool]:
+        started = perf_counter()
+        checkpoint_hash, identity = self._ocr_checkpoint_identity(
+            prepared, target, out
+        )
+        cached = self._load_ocr_checkpoint(
+            out=out,
+            checkpoint_hash=checkpoint_hash,
+            identity=identity,
+            target=target,
+        )
+        label = self._ocr_target_label(target)
+        if cached is not None:
+            elapsed = perf_counter() - started
+            print(
+                f"OCR {current}/{total} REUSED {label} {elapsed:.2f}s",
+                flush=True,
+            )
+            return cached, True
+
+        evidence = self._execute_ocr_target(target, out)
+        self._write_ocr_checkpoint(
+            out=out,
+            checkpoint_hash=checkpoint_hash,
+            identity=identity,
+            evidence=evidence,
+        )
+        elapsed = perf_counter() - started
+        print(
+            f"OCR {current}/{total} DONE   {label} {elapsed:.2f}s",
+            flush=True,
+        )
+        return evidence, False
 
     def _full_page_target(self, page, out: Path) -> dict[str, object]:
         assert page.rendered_image is not None
