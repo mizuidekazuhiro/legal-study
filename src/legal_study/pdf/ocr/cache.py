@@ -179,7 +179,7 @@ def seed_shared_ocr_cache_from_run(
     skipped = 0
     pages = payload.get("pages", {})
     if not isinstance(pages, dict):
-        raise ValueError("ocr.json pages payload is invalid")
+        raise TypeError("ocr.json pages payload is invalid")
     for page_key, page_payload in pages.items():
         if not isinstance(page_payload, dict):
             skipped += 1
