@@ -12,6 +12,11 @@ from rich.table import Table
 
 from legal_study.finalize import finalize_existing_run
 from legal_study.io_utils import atomic_write_text
+from legal_study.page_identity import (
+    align_page_indexes,
+    ensure_source_page_index,
+    load_source_page_index,
+)
 from legal_study.pdf.inspector import PdfInspector
 from legal_study.pdf.ocr.cache import seed_shared_ocr_cache_from_run
 from legal_study.pdf.ocr.paddle import (
@@ -151,6 +156,77 @@ def finalize(
     """Create reconciliation/canonical/problem Markdown from an existing P1-B run."""
     result = finalize_existing_run(run_dir)
     console.print(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+@app.command("diff-source")
+def diff_source(
+    pdf: Annotated[Path, typer.Argument(exists=True, readable=True)],
+    against_run: Annotated[
+        Path,
+        typer.Option(
+            "--against-run",
+            exists=True,
+            file_okay=False,
+            readable=True,
+            help="Completed historical run whose source/page range is the baseline.",
+        ),
+    ],
+) -> None:
+    """Compare a new PDF version with the exact source used by a historical run."""
+    settings = LocalSettings()
+    settings.ensure()
+    manifest_path = against_run.expanduser().resolve() / "run_manifest.json"
+    if not manifest_path.is_file():
+        raise typer.BadParameter(f"run_manifest.json not found: {against_run}")
+    from legal_study.run_manifest import RunManifest
+
+    manifest = RunManifest.model_validate_json(
+        manifest_path.read_text(encoding="utf-8")
+    )
+    snapshot = snapshot_source(pdf, settings=settings)
+    current = ensure_source_page_index(snapshot, settings.cache_dir)
+    previous = load_source_page_index(
+        settings.cache_dir,
+        manifest.source.sha256,
+    )
+    alignment = align_page_indexes(previous, current)
+
+    requested = set(manifest.requested_pages or [])
+    relevant = [
+        item
+        for item in alignment.records
+        if item.previous_page in requested
+    ]
+    current_pages = sorted(
+        int(item.current_page)
+        for item in relevant
+        if item.current_page is not None
+    )
+    reusable = [
+        int(item.current_page)
+        for item in relevant
+        if item.current_page is not None and item.safe_for_base_ocr_reuse
+    ]
+    console.print(
+        json.dumps(
+            {
+                "baseline_run_id": manifest.run_id,
+                "baseline_source_sha256": manifest.source.sha256,
+                "current_source_sha256": snapshot.sha256,
+                "baseline_page_count": previous.page_count,
+                "current_page_count": current.page_count,
+                "requested_baseline_pages": manifest.requested_pages,
+                "suggested_current_pages": current_pages,
+                "safe_for_base_ocr_reuse_pages": sorted(reusable),
+                "alignment_counts": alignment.counts,
+                "requested_page_alignment": [
+                    item.model_dump(mode="json") for item in relevant
+                ],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
 
 
 @app.command("seed-ocr-cache")
