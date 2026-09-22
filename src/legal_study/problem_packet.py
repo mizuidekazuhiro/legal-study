@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+from collections import defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from legal_study.handoff import create_handoff_review_sheets
 from legal_study.io_utils import atomic_write_json, atomic_write_text, file_sha256
 from legal_study.models import BBox, DocumentInspection, PageInspection, VectorMark
 from legal_study.reconciliation import (
@@ -14,7 +16,7 @@ from legal_study.reconciliation import (
     ReviewStatus,
     normalize_for_comparison,
 )
-from legal_study.repair import RepairResult
+from legal_study.repair import RepairResult, RepairStatus
 from legal_study.run_manifest import RunManifest
 from legal_study.workspace import safe_path_component
 
@@ -303,6 +305,189 @@ def build_ocr_supplements(
     ]
 
 
+def _review_task(
+    *,
+    page_number: int,
+    source_kind: str,
+    reason: str,
+    issues: list[dict[str, Any]],
+    rendered_image: str | None,
+) -> dict[str, Any]:
+    evidence_images = list(
+        dict.fromkeys(
+            str(issue["evidence_image"])
+            for issue in issues
+            if issue.get("evidence_image")
+        )
+    )
+    if rendered_image:
+        evidence_images.insert(0, rendered_image)
+        evidence_images = list(dict.fromkeys(evidence_images))
+    status = (
+        ReviewStatus.UNRESOLVED.value
+        if any(issue.get("status") == ReviewStatus.UNRESOLVED.value for issue in issues)
+        else ReviewStatus.NEEDS_REVIEW.value
+    )
+    return {
+        "id": f"p{page_number:04d}-{source_kind}",
+        "page_number": page_number,
+        "source_kind": source_kind,
+        "bbox": None,
+        "reason": reason,
+        "native_candidate": None,
+        "ocr_candidate": None,
+        "evidence_image": rendered_image,
+        "source_evidence_images": evidence_images,
+        "status": status,
+        "issue_count": len(issues),
+        "issues": issues,
+    }
+
+
+def build_grouped_needs_review(
+    *,
+    inspection: DocumentInspection,
+    reconciliation: ReconciliationResult,
+    repair: RepairResult,
+    logical_markers: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Create page-level review tasks while retaining granular raw provenance."""
+    rendered_by_page = {
+        page.page_number: page.rendered_image for page in inspection.pages
+    }
+    reconciliation_by_id = {record.id: record for record in reconciliation.records}
+    tasks: list[dict[str, Any]] = []
+
+    repair_issues: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for repair_page in repair.pages:
+        for decision in repair_page.decisions:
+            if decision.status != RepairStatus.REVIEW_REQUIRED:
+                continue
+            record = reconciliation_by_id.get(decision.source_record_id)
+            repair_issues[repair_page.page_number].append(
+                {
+                    "id": decision.id,
+                    "source_record_id": decision.source_record_id,
+                    "bbox": _bbox_values(record.bbox) if record is not None else None,
+                    "reason": decision.reason,
+                    "native_candidate": decision.native_original,
+                    "ocr_candidate": decision.ocr_original,
+                    "repair_candidate": decision.repair_candidate,
+                    "protected_content": decision.protected_content,
+                    "evidence_image": record.evidence_image if record is not None else None,
+                    "status": ReviewStatus.NEEDS_REVIEW.value,
+                }
+            )
+    for page_number, issues in sorted(repair_issues.items()):
+        tasks.append(
+            _review_task(
+                page_number=page_number,
+                source_kind="text_repair_page",
+                reason=f"review_required_text_repairs={len(issues)}",
+                issues=issues,
+                rendered_image=rendered_by_page.get(page_number),
+            )
+        )
+
+    image_issues: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    generic_issues: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for record in reconciliation.records:
+        if record.status == ReviewStatus.AUTO_VERIFIED:
+            continue
+        if record.source_kind == "suspect_native_text":
+            # Every surgical mismatch is represented by its RepairDecision above.
+            continue
+        if record.source_kind == "full_page" and record.status != ReviewStatus.UNRESOLVED:
+            # Successful full-page OCR is corroborating evidence, not a separate
+            # human task. It remains preserved in reconciliation/ocr supplements.
+            continue
+        issue = {
+            "id": record.id,
+            "bbox": _bbox_values(record.bbox),
+            "reason": record.reason,
+            "native_candidate": record.native_original,
+            "ocr_candidate": record.ocr_original,
+            "evidence_image": record.evidence_image,
+            "status": record.status.value,
+        }
+        if record.source_kind == "image_region":
+            image_issues[record.page_number].append(issue)
+        elif record.source_kind != "red_vector_cluster":
+            generic_issues[record.page_number].append(issue)
+
+    for page_number, issues in sorted(image_issues.items()):
+        tasks.append(
+            _review_task(
+                page_number=page_number,
+                source_kind="image_region_page",
+                reason=f"ocr_only_image_regions={len(issues)}",
+                issues=issues,
+                rendered_image=rendered_by_page.get(page_number),
+            )
+        )
+    for page_number, issues in sorted(generic_issues.items()):
+        tasks.append(
+            _review_task(
+                page_number=page_number,
+                source_kind="unresolved_evidence_page",
+                reason=f"unresolved_evidence_items={len(issues)}",
+                issues=issues,
+                rendered_image=rendered_by_page.get(page_number),
+            )
+        )
+
+    visual_issues: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for marker in logical_markers:
+        if marker["review_status"] == ReviewStatus.AUTO_VERIFIED.value:
+            continue
+        page_number = int(marker["page_number"])
+        visual_issues[page_number].append(
+            {
+                "id": marker["id"],
+                "kind": "marker_boundary",
+                "bbox": marker["bbox"],
+                "bbox_list": marker["bbox_list"],
+                "reason": marker["reason"],
+                "native_candidate": marker["exact_text"],
+                "ocr_candidate": None,
+                "evidence_image": marker["evidence_image"],
+                "status": marker["review_status"],
+            }
+        )
+    for record in reconciliation.records:
+        if (
+            record.source_kind == "red_vector_cluster"
+            and record.status != ReviewStatus.AUTO_VERIFIED
+        ):
+            visual_issues[record.page_number].append(
+                {
+                    "id": record.id,
+                    "kind": "red_vector_cluster",
+                    "bbox": _bbox_values(record.bbox),
+                    "reason": record.reason,
+                    "native_candidate": None,
+                    "ocr_candidate": None,
+                    "evidence_image": record.evidence_image,
+                    "status": record.status.value,
+                }
+            )
+    for page_number, issues in sorted(visual_issues.items()):
+        tasks.append(
+            _review_task(
+                page_number=page_number,
+                source_kind="visual_markup_page",
+                reason=f"visual_markup_items={len(issues)}",
+                issues=issues,
+                rendered_image=rendered_by_page.get(page_number),
+            )
+        )
+
+    return sorted(
+        tasks,
+        key=lambda item: (int(item["page_number"]), str(item["source_kind"])),
+    )
+
+
 def build_canonical_source(
     manifest: RunManifest,
     inspection: DocumentInspection,
@@ -356,40 +541,17 @@ def build_canonical_source(
     reconciliation_records = [
         record.model_dump(mode="json") for record in reconciliation.records
     ]
-    needs_review: list[dict[str, Any]] = [
-        {
-            "id": record.id,
-            "page_number": record.page_number,
-            "source_kind": record.source_kind,
-            "bbox": _bbox_values(record.bbox),
-            "reason": record.reason,
-            "native_candidate": record.native_original,
-            "ocr_candidate": record.ocr_original,
-            "evidence_image": record.evidence_image,
-            "status": record.status.value,
-        }
-        for record in reconciliation.records
-        if record.status != ReviewStatus.AUTO_VERIFIED
-    ]
-    needs_review.extend(
-        {
-            "id": marker["id"],
-            "page_number": marker["page_number"],
-            "source_kind": "marker_boundary",
-            "bbox": marker["bbox"],
-            "reason": marker["reason"],
-            "native_candidate": marker["exact_text"],
-            "ocr_candidate": None,
-            "evidence_image": marker["evidence_image"],
-            "status": marker["review_status"],
-        }
-        for marker in logical_markers
-        if marker["review_status"] != ReviewStatus.AUTO_VERIFIED.value
+    needs_review = build_grouped_needs_review(
+        inspection=inspection,
+        reconciliation=reconciliation,
+        repair=repair,
+        logical_markers=logical_markers,
     )
+    review_issue_count = sum(int(item.get("issue_count", 0)) for item in needs_review)
     ocr_supplements = build_ocr_supplements(reconciliation)
 
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "subject": manifest.subject,
         "question": manifest.question,
         "source": {
@@ -416,6 +578,7 @@ def build_canonical_source(
         "logical_markers": logical_markers,
         "ocr_supplements": ocr_supplements,
         "needs_review": needs_review,
+        "review_issue_count": review_issue_count,
         "provenance": {
             "inspection": "inspection.json",
             "ocr": "ocr.json",
@@ -451,6 +614,7 @@ def render_problem_markdown(canonical: dict[str, Any]) -> str:
         f"source_pages: {_yaml_value(source['requested_pages'])}",
         f"verification_status: {_yaml_value('needs_review' if needs_review else 'verified')}",
         f"needs_review_count: {len(needs_review)}",
+        f"review_issue_count: {int(canonical.get('review_issue_count', len(needs_review)))}",
         f"extractor_version: {_yaml_value(canonical['extractor']['app_version'])}",
         "---",
         "",
@@ -545,15 +709,29 @@ def render_problem_markdown(canonical: dict[str, Any]) -> str:
                 "",
                 f"- Page: {item['page_number']}",
                 f"- Source kind: {item['source_kind']}",
-                f"- BBox: {item['bbox']}",
                 f"- Reason: {item['reason']}",
                 f"- Status: {item['status']}",
-                f"- Evidence image: {item['evidence_image'] or 'none'}",
-                f"- Native candidate: {item['native_candidate']!r}",
-                f"- OCR candidate: {item['ocr_candidate']!r}",
+                f"- Issue count: {item.get('issue_count', 1)}",
+                (
+                    f"- Review sheet: {item.get('handoff_evidence_image') or item.get('evidence_image') or 'none'}"
+                ),
                 "",
             ]
         )
+        for issue in item.get("issues", []):
+            lines.extend(
+                [
+                    f"### {issue.get('id', 'review-item')}",
+                    "",
+                    f"- BBox: {issue.get('bbox')}",
+                    f"- Reason: {issue.get('reason')}",
+                    f"- Native candidate: {issue.get('native_candidate')!r}",
+                    f"- OCR candidate: {issue.get('ocr_candidate')!r}",
+                    f"- Repair candidate: {issue.get('repair_candidate')!r}",
+                    f"- Source evidence: {issue.get('evidence_image') or 'none'}",
+                    "",
+                ]
+            )
 
     lines.extend(
         [
@@ -681,9 +859,9 @@ def validate_problem_packet(
     )
 
     evidence_refs = [
-        str(item["evidence_image"])
+        str(item.get("handoff_evidence_image") or item.get("evidence_image"))
         for item in canonical["needs_review"]
-        if item.get("evidence_image")
+        if item.get("handoff_evidence_image") or item.get("evidence_image")
     ]
     evidence_ok = True
     for reference in evidence_refs:
@@ -746,9 +924,14 @@ def validate_problem_packet(
         checks["frontmatter_source_sha_matches"] = (
             frontmatter.get("source_sha256") == manifest.source.sha256
         )
+        checks["frontmatter_review_issue_count_matches"] = (
+            int(frontmatter.get("review_issue_count", -1))
+            == int(canonical.get("review_issue_count", len(canonical["needs_review"])))
+        )
     else:
         checks["frontmatter_needs_review_count_matches"] = False
         checks["frontmatter_source_sha_matches"] = False
+        checks["frontmatter_review_issue_count_matches"] = False
 
     upload_files = [markdown_path.name, *sorted(set(evidence_refs))]
     checks["upload_files_unique"] = len(upload_files) == len(set(upload_files))
@@ -760,6 +943,9 @@ def validate_problem_packet(
         "canonical_sha256": file_sha256(run_dir / "canonical_source.json"),
         "markdown_sha256": file_sha256(markdown_path),
         "needs_review_count": len(canonical["needs_review"]),
+        "review_issue_count": int(
+            canonical.get("review_issue_count", len(canonical["needs_review"]))
+        ),
         "upload_files": upload_files,
     }
 
@@ -776,6 +962,10 @@ def write_problem_packet(
     canonical_path = run_dir / "canonical_source.json"
     canonical = build_canonical_source(
         manifest, inspection, reconciliation, repair, ocr_payload
+    )
+    canonical["handoff_review_sheets"] = create_handoff_review_sheets(
+        run_dir=run_dir,
+        canonical=canonical,
     )
     atomic_write_json(canonical_path, canonical)
     markdown_path = run_dir / problem_markdown_filename(manifest.subject, manifest.question)
