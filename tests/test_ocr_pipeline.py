@@ -365,3 +365,80 @@ def test_ocr_checkpoint_rejects_artifact_path_traversal(tmp_path: Path) -> None:
         pipeline._execute_ocr_target_checkpointed(
             prepared, target, prepared.output_dir, current=1, total=1
         )
+
+
+def _write_shared_cache_pdf(path: Path, *, insert_front: bool, add_markup: bool) -> None:
+    document = pymupdf.open()
+    if insert_front:
+        inserted = document.new_page(width=300, height=200)
+        inserted.insert_text((30, 50), "inserted")
+    page = document.new_page(width=300, height=200)
+    page.insert_text((30, 50), "x")
+    if add_markup:
+        shape = page.new_shape()
+        shape.draw_line((30, 58), (100, 58))
+        shape.finish(color=(1.0, 1.0, 0.514), width=8)
+        shape.commit()
+    document.save(path)
+    document.close()
+
+
+def test_shared_page_cache_reuses_ocr_after_page_move_and_markup_change(
+    tmp_path: Path,
+) -> None:
+    first_dir = tmp_path / "v1"
+    second_dir = tmp_path / "v2"
+    first_dir.mkdir()
+    second_dir.mkdir()
+    first_source = first_dir / "source.pdf"
+    second_source = second_dir / "source.pdf"
+    _write_shared_cache_pdf(first_source, insert_front=False, add_markup=False)
+    _write_shared_cache_pdf(second_source, insert_front=True, add_markup=True)
+
+    settings = LocalSettings(home=tmp_path / "home")
+
+    first_snapshot = snapshot_source(first_source, settings=settings)
+    first_engine = FakeOcrEngine()
+    first_pipeline = PdfIngestPipeline(ocr_engine=first_engine)
+    first_prepared = prepare_run(
+        snapshot=first_snapshot,
+        subject="criminal",
+        question="shared-cache-v1",
+        pages=[1],
+        pipeline_config=first_pipeline.input_config(),
+        settings=settings,
+    )
+    first_pipeline.run(first_snapshot, first_prepared, pages=[1])
+    assert first_engine.calls == 1
+
+    second_snapshot = snapshot_source(second_source, settings=settings)
+    second_engine = FakeOcrEngine()
+    second_pipeline = PdfIngestPipeline(ocr_engine=second_engine)
+    second_prepared = prepare_run(
+        snapshot=second_snapshot,
+        subject="criminal",
+        question="shared-cache-v2",
+        pages=[2],
+        pipeline_config=second_pipeline.input_config(),
+        settings=settings,
+    )
+    second_pipeline.run(second_snapshot, second_prepared, pages=[2])
+
+    assert second_engine.calls == 0
+    ocr_payload = json.loads(
+        (second_prepared.output_dir / "ocr.json").read_text(encoding="utf-8")
+    )
+    assert ocr_payload["checkpoint"]["reused_targets"] == 1
+    assert ocr_payload["checkpoint"]["executed_targets"] == 0
+    evidence = ocr_payload["pages"]["2"]["full_page"]
+    assert evidence["cache"]["scope"] == "shared_page"
+    assert evidence["cache"]["reused"] is True
+
+    alignment = json.loads(
+        (second_prepared.output_dir / "page_alignment.json").read_text(encoding="utf-8")
+    )
+    moved = next(
+        item for item in alignment["records"] if item.get("current_page") == 2
+    )
+    assert moved["classification"] == "MOVED_MARKUP_CHANGED"
+    assert moved["safe_for_base_ocr_reuse"] is True
