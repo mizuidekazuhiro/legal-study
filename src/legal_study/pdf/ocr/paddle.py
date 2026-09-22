@@ -224,12 +224,7 @@ class PaddleOcrEngine:
 
         os.environ["PADDLE_PDX_CACHE_HOME"] = str(self.model_root)
         os.environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] = "1"
-        try:
-            from paddleocr import PaddleOCR
-        except ImportError as exc:  # pragma: no cover - checked above, defensive
-            raise RuntimeError("PaddleOCR is not installed; install the `ocr` extra") from exc
-
-        self._pipeline = PaddleOCR(**_paddle_options(self.model_root))
+        self._pipeline: Any | None = None
         models = status["models"]
         self._metadata = OcrBackendMetadata(
             engine=self.name,
@@ -257,8 +252,18 @@ class PaddleOcrEngine:
     def metadata(self) -> OcrBackendMetadata:
         return self._metadata.model_copy(deep=True)
 
+    def _ensure_pipeline(self) -> Any:
+        if self._pipeline is not None:
+            return self._pipeline
+        try:
+            from paddleocr import PaddleOCR
+        except ImportError as exc:  # pragma: no cover - checked during inspection
+            raise RuntimeError("PaddleOCR is not installed; install the `ocr` extra") from exc
+        self._pipeline = PaddleOCR(**_paddle_options(self.model_root))
+        return self._pipeline
+
     def recognize(self, image_path: Path) -> OcrResult:
-        result = self._pipeline.predict(str(image_path))
+        result = self._ensure_pipeline().predict(str(image_path))
         lines: list[OcrLine] = []
         scores: list[float] = []
 
