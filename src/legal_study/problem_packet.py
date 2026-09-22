@@ -1015,10 +1015,40 @@ def validate_problem_packet(
     checks["handoff_has_instructions"] = "# Handoff Instructions" in handoff
     checks["handoff_has_page_reading_pack"] = "# Page Reading Pack" in handoff
     checks["handoff_source_sha_present"] = manifest.source.sha256 in handoff
-    checks["handoff_reconciled_text_present"] = all(
-        str(page["reconciled_text"]).rstrip() in handoff
-        for page in canonical["pages"]
-    )
+    supplements_by_page: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for item in canonical.get("ocr_supplements", []):
+        if isinstance(item, dict) and item.get("page_number") is not None:
+            supplements_by_page[int(item["page_number"])].append(item)
+    primary_text_ok = True
+    low_trust_ocr_ok = True
+    for page in canonical["pages"]:
+        page_number = int(page["page_number"])
+        trust = str(page.get("text_layer_trust", "")).lower()
+        supplements = supplements_by_page.get(page_number, [])
+        full_page = next(
+            (
+                item
+                for item in supplements
+                if item.get("source_kind") == "full_page" and item.get("text")
+            ),
+            None,
+        )
+        if trust == "low":
+            low_trust_ocr_ok = low_trust_ocr_ok and full_page is not None
+            if full_page is not None:
+                primary_text_ok = (
+                    primary_text_ok
+                    and str(full_page["text"]).rstrip() in handoff
+                    and f"## PDF page {page_number}" in handoff
+                    and "- Primary text source: independent_full_page_ocr" in handoff
+                )
+        else:
+            primary_text_ok = (
+                primary_text_ok
+                and str(page["reconciled_text"]).rstrip() in handoff
+            )
+    checks["handoff_primary_text_present"] = primary_text_ok
+    checks["handoff_low_trust_has_full_page_ocr"] = low_trust_ocr_ok
     checks["handoff_review_sheets_present"] = all(
         str(reference) in handoff
         for reference in canonical.get("handoff_review_sheets", {}).values()
