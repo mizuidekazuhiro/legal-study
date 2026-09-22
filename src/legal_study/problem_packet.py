@@ -812,7 +812,7 @@ def render_handoff_markdown(canonical: dict[str, Any]) -> str:
     sheets = canonical.get("handoff_review_sheets", {})
     lines = [
         "---",
-        "handoff_schema_version: 1",
+        "handoff_schema_version: 2",
         f"subject: {_yaml_value(canonical['subject'])}",
         f"question: {_yaml_value(canonical['question'])}",
         f"source_file: {_yaml_value(source['filename'])}",
@@ -826,9 +826,10 @@ def render_handoff_markdown(canonical: dict[str, Any]) -> str:
         "",
         "- This file is the compact reading surface. canonical_source.json and *_problem.md retain the full audit trail.",
         "- The review sheet for each page is the visual authority for handwriting, red marks, marker colors, marker boundaries, pasted material, and any disagreement with extracted text.",
-        "- Reconciled text is a search/reading aid, not independent proof on low-trust pages.",
-        "- On low-trust pages, compare Reconciled Text with Independent OCR and the review sheet before treating wording as original.",
-        "- Statute numbers, dates, quantities, names, and other protected legal/numeric content must be confirmed visually when the text layer is low-trust or a repair remains review-required.",
+        "- On LOW-trust text-layer pages, the primary reading text below is independent full-page OCR; the corrupt embedded/reconciled layer is intentionally omitted from this compact handoff.",
+        "- On HIGH/MEDIUM-trust pages, the primary reading text is reconciled embedded text; OCR-only pasted/image material is shown separately.",
+        "- Statute numbers, dates, quantities, names, and other protected legal/numeric content must still be confirmed visually when a repair remains review-required.",
+        "- Marker text snippets are intentionally omitted from this compact handoff when visual review is needed; use the page review sheet for exact color and boundary confirmation.",
         "- Do not infer the legal role of a color or red vector from color alone.",
         "",
         "# Page Reading Pack",
@@ -841,12 +842,33 @@ def render_handoff_markdown(canonical: dict[str, Any]) -> str:
         sheet = None
         if isinstance(sheets, dict):
             sheet = sheets.get(page_number) or sheets.get(str(page_number))
+        supplements = supplements_by_page.get(page_number, [])
+        full_page_ocr = next(
+            (
+                item
+                for item in supplements
+                if item.get("source_kind") == "full_page" and item.get("text")
+            ),
+            None,
+        )
+        low_trust = str(page["text_layer_trust"]).lower() == "low"
+        if low_trust and full_page_ocr is not None:
+            primary_mode = "independent_full_page_ocr"
+            primary_text = str(full_page_ocr["text"]).rstrip()
+        elif low_trust:
+            primary_mode = "unavailable_requires_visual_review"
+            primary_text = "[No independent full-page OCR available. Inspect the review sheet.]"
+        else:
+            primary_mode = "reconciled_text"
+            primary_text = str(page["reconciled_text"]).rstrip()
+
         lines.extend(
             [
                 f"## PDF page {page_number}",
                 "",
                 f"- Text-layer trust: {page['text_layer_trust']}",
                 f"- Text-layer origin: {page['text_layer_origin']}",
+                f"- Primary text source: {primary_mode}",
                 f"- Auto repairs: {page['repair_auto_count']}",
                 f"- Repair review: {page['repair_review_count']}",
                 f"- Review sheet: {sheet or 'none'}",
@@ -856,20 +878,24 @@ def render_handoff_markdown(canonical: dict[str, Any]) -> str:
                     else "- Review categories: []"
                 ),
                 "",
-                "### Reconciled Text",
+                "### Primary Reading Text",
                 "",
-                str(page["reconciled_text"]).rstrip(),
+                primary_text,
                 "",
             ]
         )
 
-        supplements = supplements_by_page.get(page_number, [])
-        if supplements:
-            lines.extend(["### Independent OCR", ""])
-            for item in supplements:
+        image_supplements = [
+            item
+            for item in supplements
+            if item.get("source_kind") == "image_region" and item.get("text")
+        ]
+        if image_supplements:
+            lines.extend(["### OCR-only Pasted / Image Material", ""])
+            for item in image_supplements:
                 lines.extend(
                     [
-                        f"#### {item['source_kind']} / {item['id']}",
+                        f"#### {item['id']}",
                         "",
                         f"- Confidence: {item['confidence']}",
                         f"- Review status: {item['status']}",
@@ -881,40 +907,56 @@ def render_handoff_markdown(canonical: dict[str, Any]) -> str:
 
         markers = markers_by_page.get(page_number, [])
         if markers:
-            lines.extend(["### PDF Markings", ""])
+            marker_counts: dict[tuple[str, str], int] = defaultdict(int)
             for marker in markers:
-                lines.append(
-                    "- "
-                    + f"{marker['color']} / {marker['paint']} / "
-                    + f"{marker['review_status']}: "
-                    + repr(marker.get("exact_text"))
-                )
-            lines.append("")
+                marker_counts[
+                    (str(marker.get("color")), str(marker.get("review_status")))
+                ] += 1
+            lines.extend(["### PDF Marking Summary", ""])
+            for (color, status), count in sorted(marker_counts.items()):
+                lines.append(f"- {color} / {status}: {count}")
+            lines.extend(
+                [
+                    "- Exact marker text and boundaries: inspect the page review sheet.",
+                    "",
+                ]
+            )
 
         if review:
-            text_issues = [
+            issues = [
                 issue
                 for issue in review.get("issues", [])
                 if isinstance(issue, dict)
-                and issue.get("review_category")
-                in {"text_repair_page", "image_region_page", "unresolved_evidence_page"}
+            ]
+            text_issues = [
+                issue
+                for issue in issues
+                if issue.get("review_category")
+                in {"text_repair_page", "unresolved_evidence_page"}
             ]
             visual_count = sum(
                 1
-                for issue in review.get("issues", [])
-                if isinstance(issue, dict)
-                and issue.get("review_category") == "visual_markup_page"
+                for issue in issues
+                if issue.get("review_category") == "visual_markup_page"
+            )
+            image_count = sum(
+                1
+                for issue in issues
+                if issue.get("review_category") == "image_region_page"
             )
             lines.extend(["### Review Summary", ""])
             if visual_count:
                 lines.append(
                     f"- Visual markup items: {visual_count}; inspect the page review sheet."
                 )
+            if image_count:
+                lines.append(
+                    f"- OCR-only image items: {image_count}; inspect the image OCR and review sheet."
+                )
             for issue in text_issues:
                 lines.append(
                     "- "
                     + f"{issue.get('review_category')} / {issue.get('id')}: "
-                    + f"native={issue.get('native_candidate')!r}; "
                     + f"ocr={issue.get('ocr_candidate')!r}; "
                     + f"candidate={issue.get('repair_candidate')!r}; "
                     + f"reason={issue.get('reason')}"
