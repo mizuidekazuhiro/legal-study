@@ -86,6 +86,11 @@ def test_pipeline_writes_valid_problem_packet_with_relative_evidence(tmp_path: P
     assert "# Handoff Instructions" in handoff
     assert "# Page Reading Pack" in handoff
     assert "# Embedded Text Evidence" not in handoff
+    assert "handoff_schema_version: 2" in handoff
+    assert "### Primary Reading Text" in handoff
+    assert "### PDF Marking Summary" in handoff
+    assert validation["checks"]["handoff_primary_text_present"] is True
+    assert validation["checks"]["handoff_low_trust_has_full_page_ocr"] is True
     assert len(handoff.encode("utf-8")) < len(markdown.encode("utf-8"))
 
     assert canonical["needs_review"]
