@@ -83,6 +83,13 @@ def test_pipeline_writes_valid_problem_packet_with_relative_evidence(tmp_path: P
 
     assert canonical["needs_review"]
     assert canonical["review_issue_count"] >= len(canonical["needs_review"])
+    assert len(canonical["needs_review"]) == 1
+    assert canonical["needs_review"][0]["source_kind"] == "page_review"
+    assert canonical["needs_review"][0]["review_categories"]
+    assert all(
+        issue.get("review_category")
+        for issue in canonical["needs_review"][0]["issues"]
+    )
     assert canonical["handoff_review_sheets"] == {
         "1": "handoff_review/page-0001-review.png"
     } or canonical["handoff_review_sheets"] == {
