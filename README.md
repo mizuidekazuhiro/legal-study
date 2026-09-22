@@ -188,3 +188,10 @@ legal-study seed-ocr-cache "C:\\Users\\<user>\\.legal-study\\runs\\<completed-ru
 ```
 
 以後の新しいPDF版で同じ`stable_page_id`とOCR設定・model情報が一致すれば、進捗表示は`PAGE-CACHE`となり、OCR engineを呼びません。target単位checkpointも引き続き有効なので、同一runの中断再開では`REUSED`、別PDF版からの共有再利用では`PAGE-CACHE`と区別できます。
+
+
+## P1-D: ChatGPT handoff圧縮
+
+`needs_review`はraw evidence件数をそのまま並べず、原則として**1 PDF page = 1 review task**へ統合します。text repair、OCR-only image、marker boundary、red vectorなどの個別論点はtask内の`issues`へ保持し、それぞれに`review_category`を付けます。したがって、人が確認する単位はページ単位ですが、reconciliation / repair / markerの粒度とprovenanceは失われません。
+
+ChatGPTへ渡す画像も原則1ページ1枚の`handoff_review/page-XXXX-review.png`へ圧縮します。full-page renderを中心に、そのページで追加確認が必要なcropをreview sheetへまとめます。`problem_validation.json`の`review_issue_count`はrawな未確定論点数、`needs_review_count`はページ単位task数です。
