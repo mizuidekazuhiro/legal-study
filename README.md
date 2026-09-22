@@ -100,7 +100,8 @@ legal-study ingest ".\materials\論文マスター_刑法.pdf" --subject crimina
 - `reconciliation.json`
 - `repair.json`（embedded text / OCR / 修復後text / 修復理由）
 - `canonical_source.json`
-- `<subject>_<question>_problem.md`
+- `<subject>_<question>_problem.md`（完全監査用）
+- `<subject>_<question>_handoff.md`（ChatGPT Project投入用の圧縮版）
 - `problem_validation.json`
 - `renders/page-XXXX.png`
 - `ocr_crops/`（壊れたUnicode mappingのsurgical cropと、独立判定した画像領域）
@@ -205,3 +206,5 @@ legal-study diff-source ".\\materials\\論文マスター_刑法.pdf" `
 ```
 
 `requested_page_alignment`には旧問題ページが新版の何ページへ移動したか、`safe_for_base_ocr_reuse_pages`には本文OCRを安全に再利用できる新版ページが出ます。ページ挿入やマーカー追加があっても問題番号の手作業追跡を減らすためのshadow checkです。
+
+`*_problem.md`は監査用の完全版としてembedded evidence、marker provenance、review詳細を保持します。ChatGPT Projectへ通常投入するのは`*_handoff.md`と各ページのreview sheetです。handoff側は低信頼ページの注意事項、Reconciled Text、Independent OCR、簡略化したmarker記録、text repair候補だけを掲載し、raw provenanceはcanonical/problem側へ残します。
