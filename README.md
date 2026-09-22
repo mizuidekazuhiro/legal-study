@@ -165,3 +165,26 @@ P1-Cではnative/OCR evidenceを保守的に照合し、`AUTO_VERIFIED / NEEDS_R
 修復は自由作文ではありません。embedded text・surgical OCR・座標対応・full-page OCRの相互一致がある非数値/non-citation領域だけを`AUTO_REPAIRED`にし、条文番号、年月日、判例引用、数字を含む候補、曖昧な差分は`REVIEW_REQUIRED`のまま残します。元のembedded textとOCR evidenceは削除せず、`repair.json`へprovenance付きで保持します。
 
 `problem.md`の主本文は`reconciled_text`です。監査用のembedded textも別sectionに保持します。
+
+
+## P1-C.6: 講義後PDFの差分追跡とOCR再利用
+
+講義中にマーカー・赤字・手書きが追加されたり、途中にページが挿入されてページ番号がずれても、本文ページをページ番号だけで同一視しません。
+
+各ページについて、本文テキストと埋め込み画像から`stable_page_id`を作り、vector mark / annotationは別fingerprintとして保持します。これにより、本文が同じでマーカーだけ変わったページは`MARKUP_CHANGED`、ページ番号だけ移動したページは`MOVED`、その両方は`MOVED_MARKUP_CHANGED`として`page_alignment.json`へ記録します。
+
+```text
+旧 p.115 ── stable_page_id ──> 新 p.117
+              base content SAME
+              markup CHANGED
+```
+
+base contentが同一であれば、full-page / surgical / image-region OCRは`~/.legal-study/cache/ocr_pages/`の共有cacheから再利用できます。現在版のrender、vector、annotation、review evidenceは再生成するため、古いマーカー状態を現在版へ流用しません。本文自体が変わった近似ページは`CONTENT_CHANGED`系として追跡できますが、base OCRの自動再利用対象にはしません。
+
+既に完了している旧runのOCRを共有cacheへ登録する場合は、OCRを再実行せず次を一度だけ実行します。
+
+```powershell
+legal-study seed-ocr-cache "C:\\Users\\<user>\\.legal-study\\runs\\<completed-run>"
+```
+
+以後の新しいPDF版で同じ`stable_page_id`とOCR設定・model情報が一致すれば、進捗表示は`PAGE-CACHE`となり、OCR engineを呼びません。target単位checkpointも引き続き有効なので、同一runの中断再開では`REUSED`、別PDF版からの共有再利用では`PAGE-CACHE`と区別できます。
