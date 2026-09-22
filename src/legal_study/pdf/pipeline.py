@@ -18,7 +18,6 @@ from legal_study.page_identity import (
     find_previous_page_index,
 )
 from legal_study.pdf.inspector import PdfInspector
-from legal_study.pdf.ocr.cache import SharedOcrCache
 from legal_study.pdf.ocr.base import (
     CoordinateTransform,
     OcrBackendMetadata,
@@ -26,6 +25,7 @@ from legal_study.pdf.ocr.base import (
     OcrInputMetadata,
     OcrResult,
 )
+from legal_study.pdf.ocr.cache import SharedOcrCache
 from legal_study.pdf.ocr.routing import OcrRoutingConfig, routed_image_regions
 from legal_study.pdf.vector_marks import cluster_red_vector_evidence
 from legal_study.problem_packet import problem_markdown_filename, write_problem_packet
