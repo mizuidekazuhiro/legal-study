@@ -41,7 +41,7 @@ _OCR_STEP_VERSION = "4"
 _OCR_CHECKPOINT_SCHEMA_VERSION = 1
 _RECONCILIATION_STEP_VERSION = "3"
 _REPAIR_STEP_VERSION = "2"
-_PROBLEM_PACKET_STEP_VERSION = "4"
+_PROBLEM_PACKET_STEP_VERSION = "5"
 
 
 class PdfIngestPipeline:
@@ -1129,6 +1129,8 @@ class PdfIngestPipeline:
                 return output_hash
 
         for path in packet_paths:
+            self._archive_file(out, step_name, path)
+        for path in (out / "handoff_review").glob("*.png"):
             self._archive_file(out, step_name, path)
         self._begin(
             state,
