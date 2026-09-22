@@ -8,7 +8,10 @@ from typing import Any
 from pydantic import BaseModel
 
 from legal_study.io_utils import atomic_write_json
+from legal_study.models import DocumentInspection
+from legal_study.page_identity import page_identity_from_inspection
 from legal_study.pdf.ocr.base import OcrBackendMetadata, OcrResult
+from legal_study.run_manifest import RunManifest
 
 SHARED_OCR_CACHE_SCHEMA_VERSION = 1
 
@@ -139,3 +142,85 @@ class SharedOcrCache:
         )
         atomic_write_json(path, entry.model_dump(mode="json"))
         return path
+
+
+def seed_shared_ocr_cache_from_run(
+    run_dir: Path,
+    cache_dir: Path,
+) -> dict[str, int]:
+    run_dir = run_dir.expanduser().resolve()
+    inspection_path = run_dir / "inspection.json"
+    ocr_path = run_dir / "ocr.json"
+    manifest_path = run_dir / "run_manifest.json"
+    for path in (inspection_path, ocr_path, manifest_path):
+        if not path.is_file():
+            raise FileNotFoundError(f"Required run artifact is missing: {path}")
+
+    inspection = DocumentInspection.model_validate_json(
+        inspection_path.read_text(encoding="utf-8")
+    )
+    manifest = RunManifest.model_validate_json(
+        manifest_path.read_text(encoding="utf-8")
+    )
+    payload = json.loads(ocr_path.read_text(encoding="utf-8"))
+    backend = payload.get("backend")
+    if backend is not None and not isinstance(backend, dict):
+        raise ValueError("ocr.json backend metadata is invalid")
+
+    page_ids: dict[int, str] = {}
+    for page in inspection.pages:
+        stable_page_id = page.stable_page_id
+        if stable_page_id is None:
+            stable_page_id = page_identity_from_inspection(page).stable_page_id
+        page_ids[page.page_number] = stable_page_id
+
+    cache = SharedOcrCache(cache_dir)
+    seeded = 0
+    skipped = 0
+    pages = payload.get("pages", {})
+    if not isinstance(pages, dict):
+        raise ValueError("ocr.json pages payload is invalid")
+    for page_key, page_payload in pages.items():
+        if not isinstance(page_payload, dict):
+            skipped += 1
+            continue
+        page_number = int(page_key)
+        stable_page_id = page_ids.get(page_number)
+        if stable_page_id is None:
+            skipped += 1
+            continue
+        candidates: list[dict[str, object]] = []
+        full_page = page_payload.get("full_page")
+        if isinstance(full_page, dict):
+            candidates.append(full_page)
+        regions = page_payload.get("regions")
+        if isinstance(regions, list):
+            candidates.extend(item for item in regions if isinstance(item, dict))
+
+        for evidence in candidates:
+            target = evidence.get("target")
+            result = evidence.get("result")
+            if (
+                evidence.get("status") != "completed"
+                or not isinstance(target, dict)
+                or not isinstance(result, dict)
+            ):
+                skipped += 1
+                continue
+            target_copy = dict(target)
+            target_copy["stable_page_id"] = stable_page_id
+            OcrResult.model_validate(result)
+            cache.store(
+                stable_page_id=stable_page_id,
+                target=target_copy,
+                backend=backend,
+                result=result,
+                provenance={
+                    "source_sha256": manifest.source.sha256,
+                    "source_page": page_number,
+                    "run_id": manifest.run_id,
+                    "seeded_from_existing_run": True,
+                },
+            )
+            seeded += 1
+    return {"seeded": seeded, "skipped": skipped}
