@@ -13,6 +13,7 @@ from rich.table import Table
 from legal_study.finalize import finalize_existing_run
 from legal_study.io_utils import atomic_write_text
 from legal_study.pdf.inspector import PdfInspector
+from legal_study.pdf.ocr.cache import seed_shared_ocr_cache_from_run
 from legal_study.pdf.ocr.paddle import (
     PaddleOcrEngine,
     inspect_paddle_installation,
@@ -149,6 +150,20 @@ def finalize(
 ) -> None:
     """Create reconciliation/canonical/problem Markdown from an existing P1-B run."""
     result = finalize_existing_run(run_dir)
+    console.print(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+@app.command("seed-ocr-cache")
+def seed_ocr_cache(
+    run_dir: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=False, readable=True),
+    ],
+) -> None:
+    """Seed cross-version OCR cache from a completed historical run."""
+    settings = LocalSettings()
+    settings.ensure()
+    result = seed_shared_ocr_cache_from_run(run_dir, settings.cache_dir)
     console.print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
