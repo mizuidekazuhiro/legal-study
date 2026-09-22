@@ -1020,9 +1020,27 @@ def validate_problem_packet(
         if isinstance(item, dict) and item.get("page_number") is not None:
             supplements_by_page[int(item["page_number"])].append(item)
     primary_text_ok = True
-    low_trust_ocr_ok = True
-    for page in canonical["pages"]:
+    low_trust_source_ok = True
+    page_headings = [
+        (int(page["page_number"]), f"## PDF page {int(page['page_number'])}")
+        for page in canonical["pages"]
+    ]
+    for index, page in enumerate(canonical["pages"]):
         page_number = int(page["page_number"])
+        heading = page_headings[index][1]
+        section_start = handoff.find(heading)
+        if section_start < 0:
+            primary_text_ok = False
+            low_trust_source_ok = False
+            continue
+        if index + 1 < len(page_headings):
+            section_end = handoff.find(page_headings[index + 1][1], section_start + len(heading))
+            if section_end < 0:
+                section_end = len(handoff)
+        else:
+            section_end = len(handoff)
+        section = handoff[section_start:section_end]
+
         trust = str(page.get("text_layer_trust", "")).lower()
         supplements = supplements_by_page.get(page_number, [])
         full_page = next(
@@ -1034,21 +1052,27 @@ def validate_problem_packet(
             None,
         )
         if trust == "low":
-            low_trust_ocr_ok = low_trust_ocr_ok and full_page is not None
             if full_page is not None:
-                primary_text_ok = (
-                    primary_text_ok
-                    and str(full_page["text"]).rstrip() in handoff
-                    and f"## PDF page {page_number}" in handoff
-                    and "- Primary text source: independent_full_page_ocr" in handoff
+                low_trust_source_ok = (
+                    low_trust_source_ok
+                    and "- Primary text source: independent_full_page_ocr" in section
+                    and str(full_page["text"]).rstrip() in section
+                )
+                primary_text_ok = primary_text_ok and str(full_page["text"]).rstrip() in section
+            else:
+                low_trust_source_ok = (
+                    low_trust_source_ok
+                    and "- Primary text source: unavailable_requires_visual_review" in section
+                    and "[No independent full-page OCR available. Inspect the review sheet.]" in section
                 )
         else:
             primary_text_ok = (
                 primary_text_ok
-                and str(page["reconciled_text"]).rstrip() in handoff
+                and "- Primary text source: reconciled_text" in section
+                and str(page["reconciled_text"]).rstrip() in section
             )
     checks["handoff_primary_text_present"] = primary_text_ok
-    checks["handoff_low_trust_has_full_page_ocr"] = low_trust_ocr_ok
+    checks["handoff_low_trust_primary_source_valid"] = low_trust_source_ok
     checks["handoff_review_sheets_present"] = all(
         str(reference) in handoff
         for reference in canonical.get("handoff_review_sheets", {}).values()
