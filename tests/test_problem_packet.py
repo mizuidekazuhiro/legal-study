@@ -54,18 +54,21 @@ def test_pipeline_writes_valid_problem_packet_with_relative_evidence(tmp_path: P
     canonical_path = prepared.output_dir / "canonical_source.json"
     markdown_path = prepared.output_dir / "criminal_15_problem.md"
     validation_path = prepared.output_dir / "problem_validation.json"
+    handoff_path = prepared.output_dir / "criminal_15_handoff.md"
     reconciliation_path = prepared.output_dir / "reconciliation.json"
     repair_path = prepared.output_dir / "repair.json"
 
     assert canonical_path.is_file()
     assert markdown_path.is_file()
     assert validation_path.is_file()
+    assert handoff_path.is_file()
     assert reconciliation_path.is_file()
     assert repair_path.is_file()
 
     canonical = json.loads(canonical_path.read_text(encoding="utf-8"))
     validation = json.loads(validation_path.read_text(encoding="utf-8"))
     markdown = markdown_path.read_text(encoding="utf-8")
+    handoff = handoff_path.read_text(encoding="utf-8")
 
     assert canonical["source"]["sha256"] == snapshot.sha256
     assert canonical["source"]["requested_pages"] == [1]
@@ -80,6 +83,10 @@ def test_pipeline_writes_valid_problem_packet_with_relative_evidence(tmp_path: P
         validation["checks"]["low_trust_auto_repairs_have_full_page_support"] is True
     )
     assert "ABC DEF GHI JKL MNO" in markdown
+    assert "# Handoff Instructions" in handoff
+    assert "# Page Reading Pack" in handoff
+    assert "# Embedded Text Evidence" not in handoff
+    assert len(handoff.encode("utf-8")) < len(markdown.encode("utf-8"))
 
     assert canonical["needs_review"]
     assert canonical["review_issue_count"] >= len(canonical["needs_review"])
@@ -98,7 +105,7 @@ def test_pipeline_writes_valid_problem_packet_with_relative_evidence(tmp_path: P
     assert (prepared.output_dir / "handoff_review/page-0001-review.png").is_file()
     assert len(validation["upload_files"]) == len(set(validation["upload_files"]))
     assert validation["upload_files"] == [
-        "criminal_15_problem.md",
+        "criminal_15_handoff.md",
         "handoff_review/page-0001-review.png",
     ]
 
@@ -141,6 +148,7 @@ def test_problem_packet_resume_keeps_outputs_byte_identical(tmp_path: Path) -> N
         "repair.json",
         "canonical_source.json",
         "criminal_resume_problem.md",
+        "criminal_resume_handoff.md",
         "problem_validation.json",
     ]
     before = {name: (prepared.output_dir / name).read_bytes() for name in names}
