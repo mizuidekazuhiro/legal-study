@@ -11,7 +11,14 @@ import pymupdf
 
 from legal_study.io_utils import atomic_output_path, atomic_write_json, file_sha256
 from legal_study.models import BBox, DocumentInspection
+from legal_study.page_identity import (
+    PageAlignment,
+    align_page_indexes,
+    ensure_source_page_index,
+    find_previous_page_index,
+)
 from legal_study.pdf.inspector import PdfInspector
+from legal_study.pdf.ocr.cache import SharedOcrCache
 from legal_study.pdf.ocr.base import (
     CoordinateTransform,
     OcrBackendMetadata,
@@ -29,7 +36,8 @@ from legal_study.source_store import SourceSnapshot, verify_snapshot
 from legal_study.state import RunStateMissingError, RunStateStore
 
 _STEP_VERSION = "2"
-_OCR_STEP_VERSION = "3"
+_PAGE_IDENTITY_STEP_VERSION = "1"
+_OCR_STEP_VERSION = "4"
 _OCR_CHECKPOINT_SCHEMA_VERSION = 1
 _RECONCILIATION_STEP_VERSION = "3"
 _REPAIR_STEP_VERSION = "2"
@@ -60,7 +68,7 @@ class PdfIngestPipeline:
 
     def input_config(self) -> dict[str, object]:
         return {
-            "pipeline_version": "2",
+            "pipeline_version": "3",
             "min_native_chars": self.inspector.min_native_chars,
             "min_native_quality": self.inspector.min_native_quality,
             "render_dpi": self.inspector.render_dpi,
@@ -103,6 +111,9 @@ class PdfIngestPipeline:
                 state, prepared, snapshot_path, render_dir, pages
             )
             update_manifest_page_count(prepared, inspection.page_count)
+            _alignment, page_identity_hash = self._page_identity_step(
+                state, prepared, source, out
+            )
             review_crops, ocr_targets, crops_hash = self._crops_step(
                 state, prepared, snapshot_path, inspection, out
             )
@@ -142,6 +153,7 @@ class PdfIngestPipeline:
             )
             final_hash = self._hash_values(
                 inspection_hash,
+                page_identity_hash,
                 crops_hash,
                 ocr_hash,
                 review_hash,
@@ -197,6 +209,8 @@ class PdfIngestPipeline:
         if step_name == "PDF_INSPECTED":
             fixed_files = [out / "inspection.json"]
             generated_files.extend((out / "renders").glob("*.png"))
+        elif step_name == "PAGE_IDENTITY_INDEXED":
+            fixed_files = [out / "page_alignment.json"]
         elif step_name == "EVIDENCE_CROPS_RENDERED":
             fixed_files = [out / "evidence_crops.json"]
             generated_files.extend((out / "review_crops").glob("*.png"))
@@ -383,6 +397,62 @@ class PdfIngestPipeline:
             self._fail(state, prepared, step_name, exc)
             raise
 
+    def _page_identity_step(
+        self,
+        state: RunStateStore,
+        prepared: PreparedRun,
+        source: SourceSnapshot,
+        out: Path,
+    ) -> tuple[PageAlignment, str]:
+        step_name = "PAGE_IDENTITY_INDEXED"
+        artifact = out / "page_alignment.json"
+        input_hash = self._hash_values(
+            prepared.manifest.input_hash,
+            step_name,
+            source.sha256,
+            source.original_filename,
+        )
+        if artifact.is_file():
+            try:
+                alignment = PageAlignment.model_validate_json(
+                    artifact.read_text(encoding="utf-8")
+                )
+                if state.can_resume(
+                    prepared.manifest.run_id,
+                    step_name,
+                    input_hash=input_hash,
+                    version=_PAGE_IDENTITY_STEP_VERSION,
+                    output_hash=file_sha256(artifact),
+                ):
+                    return alignment, file_sha256(artifact)
+            except (OSError, ValueError):
+                pass
+
+        self._archive_step_artifacts(out, step_name)
+        self._begin(
+            state,
+            prepared,
+            step_name,
+            input_hash,
+            version=_PAGE_IDENTITY_STEP_VERSION,
+        )
+        try:
+            cache_dir = prepared.state_db.parent / "cache"
+            current_index = ensure_source_page_index(source, cache_dir)
+            previous_index = find_previous_page_index(current_index, cache_dir)
+            alignment = align_page_indexes(previous_index, current_index)
+            atomic_write_json(artifact, alignment.model_dump(mode="json"))
+            output_hash = file_sha256(artifact)
+            state.complete_step(
+                prepared.manifest.run_id,
+                step_name,
+                output_hash=output_hash,
+            )
+            return alignment, output_hash
+        except Exception as exc:
+            self._fail(state, prepared, step_name, exc)
+            raise
+
     def _crops_step(
         self,
         state: RunStateStore,
@@ -527,7 +597,7 @@ class PdfIngestPipeline:
                 )
 
             ocr_results: dict[str, object] = {
-                "schema_version": 4,
+                "schema_version": 5,
                 "native_text_replaced": False,
                 "backend": self._backend_metadata(),
                 "routing_config": self.routing_config.as_dict(),
@@ -753,7 +823,60 @@ class PdfIngestPipeline:
             )
             return cached, True
 
+        stable_page_id = target.get("stable_page_id")
+        shared_cache = SharedOcrCache(prepared.state_db.parent / "cache")
+        backend = self._backend_metadata()
+        if isinstance(stable_page_id, str) and len(stable_page_id) == 64:
+            shared = shared_cache.load(
+                stable_page_id=stable_page_id,
+                target=target,
+                backend=backend,
+            )
+            if shared is not None:
+                cached_result = OcrResult.model_validate(shared.result)
+                enriched = self._attach_input_metadata(cached_result, target)
+                evidence: dict[str, object] = {
+                    "target": target,
+                    "status": "completed",
+                    "result": enriched.model_dump(mode="json"),
+                    "cache": {
+                        "scope": "shared_page",
+                        "reused": True,
+                        "stable_page_id": stable_page_id,
+                        "provenance": shared.provenance,
+                    },
+                }
+                self._write_ocr_checkpoint(
+                    out=out,
+                    checkpoint_hash=checkpoint_hash,
+                    identity=identity,
+                    evidence=evidence,
+                )
+                elapsed = perf_counter() - started
+                print(
+                    f"OCR {current}/{total} PAGE-CACHE {label} {elapsed:.2f}s",
+                    flush=True,
+                )
+                return evidence, True
+
         evidence = self._execute_ocr_target(target, out)
+        if (
+            evidence.get("status") == "completed"
+            and isinstance(stable_page_id, str)
+            and len(stable_page_id) == 64
+            and isinstance(evidence.get("result"), dict)
+        ):
+            shared_cache.store(
+                stable_page_id=stable_page_id,
+                target=target,
+                backend=backend,
+                result=evidence["result"],  # type: ignore[arg-type]
+                provenance={
+                    "source_sha256": prepared.manifest.source.sha256,
+                    "source_page": int(target["page_number"]),
+                    "run_id": prepared.manifest.run_id,
+                },
+            )
         self._write_ocr_checkpoint(
             out=out,
             checkpoint_hash=checkpoint_hash,
@@ -788,6 +911,7 @@ class PdfIngestPipeline:
                 if page.text_layer_trust.value == "low"
                 else "insufficient_or_low_quality_native_text"
             ),
+            extra={"stable_page_id": page.stable_page_id},
         )
 
     def _attach_input_metadata(
@@ -1195,6 +1319,7 @@ class PdfIngestPipeline:
                             page_rotation=inspected_page.rotation,
                             reason=region.reason,
                             extra={
+                                "stable_page_id": inspected_page.stable_page_id,
                                 "native_candidate": region.text,
                                 "native_bbox": [
                                     region.bbox.x0,
@@ -1233,6 +1358,7 @@ class PdfIngestPipeline:
                             page_rotation=inspected_page.rotation,
                             reason=reason,
                             extra={
+                                "stable_page_id": inspected_page.stable_page_id,
                                 "image_index": image_region.image_index,
                                 "image_xref": image_region.xref,
                                 "source_image_digest": image_region.digest,
