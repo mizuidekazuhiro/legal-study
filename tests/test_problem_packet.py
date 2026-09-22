@@ -81,13 +81,19 @@ def test_pipeline_writes_valid_problem_packet_with_relative_evidence(tmp_path: P
     )
     assert "ABC DEF GHI JKL MNO" in markdown
 
-    evidence_refs = [
-        item["evidence_image"]
-        for item in canonical["needs_review"]
-        if item.get("evidence_image")
-    ]
-    assert len(evidence_refs) > len(set(evidence_refs))
+    assert canonical["needs_review"]
+    assert canonical["review_issue_count"] >= len(canonical["needs_review"])
+    assert canonical["handoff_review_sheets"] == {
+        "1": "handoff_review/page-0001-review.png"
+    } or canonical["handoff_review_sheets"] == {
+        1: "handoff_review/page-0001-review.png"
+    }
+    assert (prepared.output_dir / "handoff_review/page-0001-review.png").is_file()
     assert len(validation["upload_files"]) == len(set(validation["upload_files"]))
+    assert validation["upload_files"] == [
+        "criminal_15_problem.md",
+        "handoff_review/page-0001-review.png",
+    ]
 
     end = markdown.find("\n---\n", 4)
     frontmatter = yaml.safe_load(markdown[4:end])
@@ -96,11 +102,15 @@ def test_pipeline_writes_valid_problem_packet_with_relative_evidence(tmp_path: P
     assert frontmatter["source_pages"] == [1]
 
     for item in canonical["needs_review"]:
-        reference = item.get("evidence_image")
-        if reference:
-            assert not Path(reference).is_absolute()
-            assert ".." not in Path(reference).parts
-            assert (prepared.output_dir / reference).is_file()
+        reference = item.get("handoff_evidence_image")
+        assert reference
+        assert not Path(reference).is_absolute()
+        assert ".." not in Path(reference).parts
+        assert (prepared.output_dir / reference).is_file()
+        for source_reference in item.get("source_evidence_images", []):
+            assert not Path(source_reference).is_absolute()
+            assert ".." not in Path(source_reference).parts
+            assert (prepared.output_dir / source_reference).is_file()
 
 
 def test_problem_packet_resume_keeps_outputs_byte_identical(tmp_path: Path) -> None:
