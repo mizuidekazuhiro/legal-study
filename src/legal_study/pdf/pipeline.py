@@ -28,7 +28,11 @@ from legal_study.pdf.ocr.base import (
 from legal_study.pdf.ocr.cache import SharedOcrCache
 from legal_study.pdf.ocr.routing import OcrRoutingConfig, routed_image_regions
 from legal_study.pdf.vector_marks import cluster_red_vector_evidence
-from legal_study.problem_packet import problem_markdown_filename, write_problem_packet
+from legal_study.problem_packet import (
+    handoff_markdown_filename,
+    problem_markdown_filename,
+    write_problem_packet,
+)
 from legal_study.reconciliation import ReconciliationResult, build_reconciliation
 from legal_study.repair import RepairResult, build_repairs
 from legal_study.run_manifest import PreparedRun, update_manifest_page_count
@@ -41,7 +45,7 @@ _OCR_STEP_VERSION = "4"
 _OCR_CHECKPOINT_SCHEMA_VERSION = 1
 _RECONCILIATION_STEP_VERSION = "3"
 _REPAIR_STEP_VERSION = "2"
-_PROBLEM_PACKET_STEP_VERSION = "5"
+_PROBLEM_PACKET_STEP_VERSION = "6"
 
 
 class PdfIngestPipeline:
@@ -1112,11 +1116,14 @@ class PdfIngestPipeline:
         markdown_path = out / problem_markdown_filename(
             prepared.manifest.subject, prepared.manifest.question
         )
+        handoff_path = out / handoff_markdown_filename(
+            prepared.manifest.subject, prepared.manifest.question
+        )
         validation_path = out / "problem_validation.json"
         input_hash = self._hash_values(
             prepared.manifest.input_hash, step_name, *upstream_hashes
         )
-        packet_paths = [canonical_path, markdown_path, validation_path]
+        packet_paths = [canonical_path, markdown_path, handoff_path, validation_path]
         if all(path.is_file() for path in packet_paths):
             output_hash = self._hash_values(*(file_sha256(path) for path in packet_paths))
             if state.can_resume(
