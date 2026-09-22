@@ -26,6 +26,7 @@ from legal_study.pdf.ocr.paddle import (
 )
 from legal_study.pdf.ocr.routing import OcrRoutingConfig
 from legal_study.pdf.pipeline import PdfIngestPipeline
+from legal_study.problem_packet import handoff_markdown_filename
 from legal_study.run_manifest import prepare_run
 from legal_study.settings import LocalSettings
 from legal_study.source_store import snapshot_source
@@ -318,6 +319,20 @@ def ingest(
                 ],
                 "problem_markdown": (
                     problem_markdown.name if problem_markdown is not None else None
+                ),
+                "handoff_markdown": (
+                    handoff_markdown_filename(
+                        prepared.manifest.subject,
+                        prepared.manifest.question,
+                    )
+                    if (
+                        prepared.output_dir
+                        / handoff_markdown_filename(
+                            prepared.manifest.subject,
+                            prepared.manifest.question,
+                        )
+                    ).is_file()
+                    else None
                 ),
                 "canonical_source": (
                     "canonical_source.json"
