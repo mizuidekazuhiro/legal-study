@@ -7,6 +7,7 @@ from typing import Any
 from legal_study.io_utils import file_sha256
 from legal_study.models import DocumentInspection
 from legal_study.pdf.pipeline import PdfIngestPipeline
+from legal_study.problem_packet import handoff_markdown_filename
 from legal_study.run_manifest import PreparedRun, RunManifest
 from legal_study.settings import LocalSettings
 from legal_study.state import RunStateStore
@@ -97,12 +98,18 @@ def finalize_existing_run(
         raise RuntimeError(
             f"Expected exactly one problem Markdown, found {len(markdown_files)}"
         )
+    handoff_path = out / handoff_markdown_filename(
+        manifest.subject, manifest.question
+    )
+    if not handoff_path.is_file():
+        raise RuntimeError(f"Expected handoff Markdown: {handoff_path.name}")
     return {
         "run_id": manifest.run_id,
         "output_dir": str(out),
         "reconciliation": reconciliation.counts,
         "repair": repair.counts,
         "problem_markdown": markdown_files[0].name,
+        "handoff_markdown": handoff_path.name,
         "canonical_source": "canonical_source.json",
         "problem_validation": validation,
         "packet_hash": packet_hash,
