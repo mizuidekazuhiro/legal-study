@@ -70,6 +70,7 @@ def test_offline_engine_uses_hashed_local_models_and_preserves_metadata(
     monkeypatch.setitem(sys.modules, "paddleocr", fake_module)
 
     engine = paddle.PaddleOcrEngine(model_root=tmp_path)
+    assert calls == []
     result = engine.recognize(tmp_path / "crop.png")
 
     assert calls[0]["device"] == "cpu"
@@ -120,3 +121,25 @@ def test_runtime_version_change_requires_manifest_refresh(
 
     assert status["ready"] is False
     assert "runtime_version_mismatch:3.3.1:3.2.2" in status["problems"]
+
+
+def test_engine_metadata_does_not_initialize_models(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_model_store(tmp_path)
+    _fake_versions(monkeypatch)
+    calls: list[dict[str, object]] = []
+
+    class FakePaddleOcr:
+        def __init__(self, **options: object) -> None:
+            calls.append(options)
+
+    fake_module = types.ModuleType("paddleocr")
+    fake_module.PaddleOCR = FakePaddleOcr  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "paddleocr", fake_module)
+
+    engine = paddle.PaddleOcrEngine(model_root=tmp_path)
+    metadata = engine.metadata
+
+    assert metadata.engine == "paddleocr"
+    assert calls == []
