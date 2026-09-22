@@ -482,10 +482,45 @@ def build_grouped_needs_review(
             )
         )
 
-    return sorted(
-        tasks,
-        key=lambda item: (int(item["page_number"]), str(item["source_kind"])),
-    )
+    page_tasks: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for task in tasks:
+        page_tasks[int(task["page_number"])].append(task)
+
+    consolidated: list[dict[str, Any]] = []
+    for page_number, page_level_tasks in sorted(page_tasks.items()):
+        categories = sorted(
+            {
+                str(task["source_kind"])
+                for task in page_level_tasks
+                if task.get("source_kind")
+            }
+        )
+        issues: list[dict[str, Any]] = []
+        for task in page_level_tasks:
+            category = str(task.get("source_kind", "unknown"))
+            for issue in task.get("issues", []):
+                if not isinstance(issue, dict):
+                    continue
+                issues.append(
+                    {
+                        **issue,
+                        "review_category": category,
+                    }
+                )
+        consolidated_task = _review_task(
+            page_number=page_number,
+            source_kind="page_review",
+            reason=(
+                f"review_items={len(issues)};"
+                f"categories={','.join(categories)}"
+            ),
+            issues=issues,
+            rendered_image=rendered_by_page.get(page_number),
+        )
+        consolidated_task["review_categories"] = categories
+        consolidated.append(consolidated_task)
+
+    return consolidated
 
 
 def build_canonical_source(
