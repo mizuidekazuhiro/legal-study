@@ -166,3 +166,91 @@ def test_low_trust_repair_without_full_page_support_stays_review() -> None:
     result = build_repairs(inspection, reconciliation)
     assert result.pages[0].decisions[0].status == RepairStatus.REVIEW_REQUIRED
     assert result.pages[0].reconciled_text == "科学的見ᆅから判断する。"
+
+
+def test_context_repair_keeps_expanding_replacement_at_span_start() -> None:
+    inspection = _inspection(
+        "判断の♏として、科学的見ᆅから。", trust=TextLayerTrust.LOW
+    )
+    reconciliation = ReconciliationResult(
+        source_sha256=inspection.sha256,
+        records=[
+            _record(
+                record_id="p0001-full-001",
+                kind="full_page",
+                native=None,
+                ocr="判断の基礎として、科学的見地から。",
+            ),
+            _record(
+                record_id="p0001-ocr-001",
+                kind="suspect_native_text",
+                native="♏として、科学的見ᆅから。",
+                ocr="基礎として、科学的見地から。",
+            ),
+        ],
+        counts={},
+    )
+
+    result = build_repairs(inspection, reconciliation)
+    decision = result.pages[0].decisions[0]
+    assert decision.repair_candidate == "基礎として、科学的見地から。"
+    assert decision.status == RepairStatus.AUTO_REPAIRED
+    assert result.pages[0].reconciled_text == "判断の基礎として、科学的見地から。"
+
+
+def test_context_repair_trims_verified_leading_page_context() -> None:
+    inspection = _inspection("利用行為の㛤ጞ時点である。", trust=TextLayerTrust.LOW)
+    reconciliation = ReconciliationResult(
+        source_sha256=inspection.sha256,
+        records=[
+            _record(
+                record_id="p0001-full-001",
+                kind="full_page",
+                native=None,
+                ocr="利用行為の開始時点である。",
+            ),
+            _record(
+                record_id="p0001-ocr-001",
+                kind="suspect_native_text",
+                native="㛤ጞ時点である。",
+                ocr="の開始時点である。",
+            ),
+        ],
+        counts={},
+    )
+
+    result = build_repairs(inspection, reconciliation)
+    decision = result.pages[0].decisions[0]
+    assert decision.repair_candidate == "開始時点である。"
+    assert decision.status == RepairStatus.AUTO_REPAIRED
+    assert result.pages[0].reconciled_text == "利用行為の開始時点である。"
+
+
+def test_corrupt_article_marker_stays_protected_after_candidate_trimming() -> None:
+    inspection = _inspection(
+        "殺人罪（᮲前ẁ）が成立する。", trust=TextLayerTrust.LOW
+    )
+    reconciliation = ReconciliationResult(
+        source_sha256=inspection.sha256,
+        records=[
+            _record(
+                record_id="p0001-full-001",
+                kind="full_page",
+                native=None,
+                ocr="殺人罪（211条前段）が成立する。",
+            ),
+            _record(
+                record_id="p0001-ocr-001",
+                kind="suspect_native_text",
+                native="᮲前ẁ）が成立する。",
+                ocr="1条前段）が成立する。",
+            ),
+        ],
+        counts={},
+    )
+
+    result = build_repairs(inspection, reconciliation)
+    decision = result.pages[0].decisions[0]
+    assert decision.status == RepairStatus.REVIEW_REQUIRED
+    assert decision.protected_content is True
+    assert result.pages[0].reconciled_text == "殺人罪（᮲前ẁ）が成立する。"
