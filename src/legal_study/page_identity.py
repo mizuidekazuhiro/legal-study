@@ -156,6 +156,13 @@ def page_identity_from_components(
 ) -> PageIdentityRecord:
     normalized_text = normalize_page_text(native_text)
     text_fingerprint = _hash_payload(normalized_text)
+    if isinstance(image_payload, list):
+        image_payload = sorted(
+            image_payload,
+            key=lambda item: json.dumps(
+                item, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            ),
+        )
     image_fingerprint = _hash_payload(image_payload)
     vector_fingerprint = _hash_payload(vector_payload)
     annotation_fingerprint = _hash_payload(annotation_payload)
