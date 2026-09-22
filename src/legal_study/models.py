@@ -125,6 +125,12 @@ class PageInspection(BaseModel):
     raw_image_regions: list[RawImageRegion] = Field(default_factory=list)
     vector_marks: list[VectorMark] = Field(default_factory=list)
     rendered_image: str | None = None
+    stable_page_id: str | None = None
+    base_content_hash: str | None = None
+    text_fingerprint: str | None = None
+    image_fingerprint: str | None = None
+    vector_fingerprint: str | None = None
+    annotation_fingerprint: str | None = None
     reasons: list[str] = Field(default_factory=list)
 
 
