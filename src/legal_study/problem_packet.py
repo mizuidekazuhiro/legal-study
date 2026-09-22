@@ -631,6 +631,12 @@ def problem_markdown_filename(subject: str, question: str) -> str:
     return f"{safe_subject}_{safe_question}_problem.md"
 
 
+def handoff_markdown_filename(subject: str, question: str) -> str:
+    safe_subject = safe_path_component(subject, fallback="unknown")
+    safe_question = safe_path_component(question, fallback="adhoc")
+    return f"{safe_subject}_{safe_question}_handoff.md"
+
+
 def _yaml_value(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False)
 
@@ -784,6 +790,149 @@ def render_problem_markdown(canonical: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def render_handoff_markdown(canonical: dict[str, Any]) -> str:
+    """Render the compact ChatGPT handoff while keeping audit detail in canonical/problem.md."""
+    source = canonical["source"]
+    pages = canonical["pages"]
+    supplements_by_page: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for item in canonical.get("ocr_supplements", []):
+        if isinstance(item, dict) and item.get("page_number") is not None:
+            supplements_by_page[int(item["page_number"])].append(item)
+
+    markers_by_page: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for marker in canonical.get("logical_markers", []):
+        if isinstance(marker, dict) and marker.get("page_number") is not None:
+            markers_by_page[int(marker["page_number"])].append(marker)
+
+    reviews_by_page = {
+        int(item["page_number"]): item
+        for item in canonical.get("needs_review", [])
+        if isinstance(item, dict) and item.get("page_number") is not None
+    }
+    sheets = canonical.get("handoff_review_sheets", {})
+    lines = [
+        "---",
+        "handoff_schema_version: 1",
+        f"subject: {_yaml_value(canonical['subject'])}",
+        f"question: {_yaml_value(canonical['question'])}",
+        f"source_file: {_yaml_value(source['filename'])}",
+        f"source_sha256: {_yaml_value(source['sha256'])}",
+        f"source_pages: {_yaml_value(source['requested_pages'])}",
+        f"page_review_count: {len(canonical.get('needs_review', []))}",
+        f"review_issue_count: {int(canonical.get('review_issue_count', 0))}",
+        "---",
+        "",
+        "# Handoff Instructions",
+        "",
+        "- This file is the compact reading surface. canonical_source.json and *_problem.md retain the full audit trail.",
+        "- The review sheet for each page is the visual authority for handwriting, red marks, marker colors, marker boundaries, pasted material, and any disagreement with extracted text.",
+        "- Reconciled text is a search/reading aid, not independent proof on low-trust pages.",
+        "- On low-trust pages, compare Reconciled Text with Independent OCR and the review sheet before treating wording as original.",
+        "- Statute numbers, dates, quantities, names, and other protected legal/numeric content must be confirmed visually when the text layer is low-trust or a repair remains review-required.",
+        "- Do not infer the legal role of a color or red vector from color alone.",
+        "",
+        "# Page Reading Pack",
+        "",
+    ]
+
+    for page in pages:
+        page_number = int(page["page_number"])
+        review = reviews_by_page.get(page_number)
+        sheet = None
+        if isinstance(sheets, dict):
+            sheet = sheets.get(page_number) or sheets.get(str(page_number))
+        lines.extend(
+            [
+                f"## PDF page {page_number}",
+                "",
+                f"- Text-layer trust: {page['text_layer_trust']}",
+                f"- Text-layer origin: {page['text_layer_origin']}",
+                f"- Auto repairs: {page['repair_auto_count']}",
+                f"- Repair review: {page['repair_review_count']}",
+                f"- Review sheet: {sheet or 'none'}",
+                (
+                    f"- Review categories: {review.get('review_categories', [])}"
+                    if review
+                    else "- Review categories: []"
+                ),
+                "",
+                "### Reconciled Text",
+                "",
+                str(page["reconciled_text"]).rstrip(),
+                "",
+            ]
+        )
+
+        supplements = supplements_by_page.get(page_number, [])
+        if supplements:
+            lines.extend(["### Independent OCR", ""])
+            for item in supplements:
+                lines.extend(
+                    [
+                        f"#### {item['source_kind']} / {item['id']}",
+                        "",
+                        f"- Confidence: {item['confidence']}",
+                        f"- Review status: {item['status']}",
+                        "",
+                        str(item["text"]).rstrip(),
+                        "",
+                    ]
+                )
+
+        markers = markers_by_page.get(page_number, [])
+        if markers:
+            lines.extend(["### PDF Markings", ""])
+            for marker in markers:
+                lines.append(
+                    "- "
+                    + f"{marker['color']} / {marker['paint']} / "
+                    + f"{marker['review_status']}: "
+                    + repr(marker.get("exact_text"))
+                )
+            lines.append("")
+
+        if review:
+            text_issues = [
+                issue
+                for issue in review.get("issues", [])
+                if isinstance(issue, dict)
+                and issue.get("review_category")
+                in {"text_repair_page", "image_region_page", "unresolved_evidence_page"}
+            ]
+            visual_count = sum(
+                1
+                for issue in review.get("issues", [])
+                if isinstance(issue, dict)
+                and issue.get("review_category") == "visual_markup_page"
+            )
+            lines.extend(["### Review Summary", ""])
+            if visual_count:
+                lines.append(
+                    f"- Visual markup items: {visual_count}; inspect the page review sheet."
+                )
+            for issue in text_issues:
+                lines.append(
+                    "- "
+                    + f"{issue.get('review_category')} / {issue.get('id')}: "
+                    + f"native={issue.get('native_candidate')!r}; "
+                    + f"ocr={issue.get('ocr_candidate')!r}; "
+                    + f"candidate={issue.get('repair_candidate')!r}; "
+                    + f"reason={issue.get('reason')}"
+                )
+            lines.append("")
+
+    lines.extend(
+        [
+            "# Completion Gate",
+            "",
+            "- Do not treat a page as visually verified until its review sheet has been inspected.",
+            "- If a review-required text conflict cannot be resolved from the sheet, report it as unresolved rather than guessing.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def _resolve_evidence(run_dir: Path, reference: str) -> Path:
     relative = Path(reference)
     if relative.is_absolute():
@@ -801,6 +950,7 @@ def validate_problem_packet(
     inspection: DocumentInspection,
     canonical: dict[str, Any],
     markdown_path: Path,
+    handoff_path: Path,
 ) -> dict[str, Any]:
     checks: dict[str, bool] = {}
     checks["source_sha_matches"] = (
@@ -817,6 +967,20 @@ def validate_problem_packet(
     markdown_bytes = markdown_path.read_bytes()
     markdown = markdown_bytes.decode("utf-8")
     checks["markdown_utf8"] = True
+    handoff_bytes = handoff_path.read_bytes()
+    handoff = handoff_bytes.decode("utf-8")
+    checks["handoff_markdown_utf8"] = True
+    checks["handoff_has_instructions"] = "# Handoff Instructions" in handoff
+    checks["handoff_has_page_reading_pack"] = "# Page Reading Pack" in handoff
+    checks["handoff_source_sha_present"] = manifest.source.sha256 in handoff
+    checks["handoff_reconciled_text_present"] = all(
+        str(page["reconciled_text"]).rstrip() in handoff
+        for page in canonical["pages"]
+    )
+    checks["handoff_review_sheets_present"] = all(
+        str(reference) in handoff
+        for reference in canonical.get("handoff_review_sheets", {}).values()
+    )
     if not markdown.startswith("---\n"):
         checks["yaml_parseable"] = False
     else:
@@ -968,7 +1132,7 @@ def validate_problem_packet(
         checks["frontmatter_source_sha_matches"] = False
         checks["frontmatter_review_issue_count_matches"] = False
 
-    upload_files = [markdown_path.name, *sorted(set(evidence_refs))]
+    upload_files = [handoff_path.name, *sorted(set(evidence_refs))]
     checks["upload_files_unique"] = len(upload_files) == len(set(upload_files))
     valid = all(checks.values())
     return {
@@ -977,6 +1141,7 @@ def validate_problem_packet(
         "checks": checks,
         "canonical_sha256": file_sha256(run_dir / "canonical_source.json"),
         "markdown_sha256": file_sha256(markdown_path),
+        "handoff_markdown_sha256": file_sha256(handoff_path),
         "needs_review_count": len(canonical["needs_review"]),
         "review_issue_count": int(
             canonical.get("review_issue_count", len(canonical["needs_review"]))
@@ -1005,12 +1170,17 @@ def write_problem_packet(
     atomic_write_json(canonical_path, canonical)
     markdown_path = run_dir / problem_markdown_filename(manifest.subject, manifest.question)
     atomic_write_text(markdown_path, render_problem_markdown(canonical))
+    handoff_path = run_dir / handoff_markdown_filename(
+        manifest.subject, manifest.question
+    )
+    atomic_write_text(handoff_path, render_handoff_markdown(canonical))
     validation = validate_problem_packet(
         run_dir=run_dir,
         manifest=manifest,
         inspection=inspection,
         canonical=canonical,
         markdown_path=markdown_path,
+        handoff_path=handoff_path,
     )
     atomic_write_json(run_dir / "problem_validation.json", validation)
     if not validation["valid"]:
