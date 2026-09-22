@@ -22,6 +22,7 @@ from legal_study.models import (
     TextLayerOrigin,
     TextLayerTrust,
 )
+from legal_study.page_identity import page_identity_from_components
 from legal_study.pdf.quality import (
     japanese_char_ratio,
     native_text_quality,
@@ -118,6 +119,42 @@ class PdfInspector:
         drawings = page.get_drawings()
         raw_vector_drawings = self._raw_vector_drawings(drawings)
         marks = extract_vector_marks(page, drawings=drawings)
+        identity = page_identity_from_components(
+            page_number=page_number,
+            width=page.rect.width,
+            height=page.rect.height,
+            rotation=page.rotation,
+            native_text=native_text,
+            image_payload=[
+                {
+                    "digest": region.digest,
+                    "bbox": [
+                        round(region.bbox.x0, 3),
+                        round(region.bbox.y0, 3),
+                        round(region.bbox.x1, 3),
+                        round(region.bbox.y1, 3),
+                    ],
+                    "width": region.raw.get("width"),
+                    "height": region.raw.get("height"),
+                }
+                for region in raw_image_regions
+            ],
+            vector_payload=[
+                {
+                    "rect": [
+                        round(drawing.rect.x0, 3),
+                        round(drawing.rect.y0, 3),
+                        round(drawing.rect.x1, 3),
+                        round(drawing.rect.y1, 3),
+                    ],
+                    "raw": drawing.raw,
+                }
+                for drawing in raw_vector_drawings
+            ],
+            annotation_payload=[
+                annotation.model_dump(mode="json") for annotation in annotations
+            ],
+        )
 
         reasons: list[str] = []
         if native_count < self.min_native_chars:
@@ -209,6 +246,12 @@ class PdfInspector:
             raw_image_regions=raw_image_regions,
             vector_marks=marks,
             rendered_image=rendered,
+            stable_page_id=identity.stable_page_id,
+            base_content_hash=identity.base_content_hash,
+            text_fingerprint=identity.text_fingerprint,
+            image_fingerprint=identity.image_fingerprint,
+            vector_fingerprint=identity.vector_fingerprint,
+            annotation_fingerprint=identity.annotation_fingerprint,
             reasons=reasons,
         )
 
