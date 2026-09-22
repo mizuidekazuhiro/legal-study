@@ -280,6 +280,19 @@ def ensure_source_page_index(snapshot: SourceSnapshot, cache_dir: Path) -> Sourc
     return index
 
 
+def load_source_page_index(
+    cache_dir: Path,
+    source_sha256: str,
+) -> SourcePageIndex:
+    path = cache_dir / "page_indexes" / f"{source_sha256}.json"
+    if not path.is_file():
+        raise FileNotFoundError(f"Page index is missing for source: {source_sha256}")
+    index = SourcePageIndex.model_validate_json(path.read_text(encoding="utf-8"))
+    if index.source_sha256 != source_sha256:
+        raise ValueError("Cached page index SHA does not match its filename")
+    return index
+
+
 def find_previous_page_index(
     current: SourcePageIndex,
     cache_dir: Path,
