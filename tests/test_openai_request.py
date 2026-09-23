@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from legal_study.openai_request import (
+    HOST_SOURCE_SNAPSHOT_PATH_SENTINEL,
     build_openai_responses_request_template,
     make_openai_strict_schema,
 )
@@ -275,7 +276,7 @@ def test_request_schema_binds_immutable_source_values(tmp_path: Path) -> None:
 
     assert source["source_sha256"]["enum"] == [bundle.source.source_sha256]
     assert source["source_snapshot_path"]["enum"] == [
-        bundle.source.source_snapshot_path
+        HOST_SOURCE_SNAPSHOT_PATH_SENTINEL
     ]
     assert source["run_id"]["enum"] == [bundle.source.run_id]
     assert source["handoff_path"]["enum"] == [bundle.source.handoff_path]
