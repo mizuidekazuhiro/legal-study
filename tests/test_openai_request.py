@@ -39,6 +39,12 @@ def _write_inputs(run_dir: Path, instruction_dir: Path) -> None:
             "sha256": "a" * 64,
             "requested_pages": [110],
         },
+        "pages": [
+            {
+                "page_number": 110,
+                "repair_review_count": 1,
+            }
+        ],
         "handoff_review_sheets": {
             "110": "handoff_review/page-0110-review.png",
         },
@@ -122,6 +128,7 @@ def test_request_template_matches_responses_multimodal_shape(tmp_path: Path) -> 
     assert content[0]["type"] == "input_text"
     assert "source_sha256: " + "a" * 64 in content[0]["text"]
     assert "page:110:primary_text" in content[0]["text"]
+    assert "review_required=true" in content[0]["text"]
     assert "review-sheet:110" in content[0]["text"]
 
     image = content[1]
@@ -254,6 +261,9 @@ def test_request_schema_binds_immutable_source_values(tmp_path: Path) -> None:
         run_dir=run_dir,
     )
     schema = request.payload["text"]["format"]["schema"]
+    assert schema["properties"]["subject"]["enum"] == [bundle.subject]
+    assert schema["properties"]["question"]["enum"] == [bundle.question]
+
     source = schema["$defs"]["DraftSource"]["properties"]
 
     assert source["source_sha256"]["enum"] == [bundle.source.source_sha256]
