@@ -14,10 +14,10 @@ from legal_study.automation.file_watcher import iter_file_updates
 from legal_study.automation.orchestrator import watch_pdf_updates
 from legal_study.automation.sync_stability import mark_question_sync_stable
 from legal_study.automation.worker import drain_pending_work, process_next_work_item
-from legal_study.completion.done_marker import detect_done_markers, save_done_stamp
-from legal_study.completion.question_resolution import apply_done_markers
 from legal_study.chat_packet import build_chat_packet
 from legal_study.chat_result import validate_chat_result
+from legal_study.completion.done_marker import detect_done_markers, save_done_stamp
+from legal_study.completion.question_resolution import apply_done_markers
 from legal_study.finalize import finalize_existing_run
 from legal_study.io_utils import atomic_write_text
 from legal_study.openai_poc import (
