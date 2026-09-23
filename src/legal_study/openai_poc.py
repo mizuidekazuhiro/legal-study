@@ -9,7 +9,10 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from legal_study.io_utils import atomic_write_json, atomic_write_text
-from legal_study.openai_request import build_openai_responses_request_template
+from legal_study.openai_request import (
+    HOST_SOURCE_SNAPSHOT_PATH_SENTINEL,
+    build_openai_responses_request_template,
+)
 from legal_study.problem_packet import handoff_markdown_filename
 from legal_study.run_manifest import RunManifest
 from legal_study.settings import LocalSettings
@@ -273,8 +276,13 @@ def run_openai_study_draft_poc(
     atomic_write_text(raw_response_path, output_text)
     raw_response_rel = raw_response_path.name
 
-    binding_issue_codes = _bundle_binding_issue_codes(
+    host_bound_output_text = _inject_host_source_snapshot_path(
         output_text=output_text,
+        bundle=bundle,
+    )
+
+    binding_issue_codes = _bundle_binding_issue_codes(
+        output_text=host_bound_output_text,
         bundle=bundle,
     )
     if binding_issue_codes:
@@ -302,7 +310,7 @@ def run_openai_study_draft_poc(
         return result
 
     acceptance = accept_study_draft_response(
-        raw_response_text=output_text,
+        raw_response_text=host_bound_output_text,
         run_dir=root,
     )
     issue_codes = [issue.code for issue in acceptance.issues]
@@ -337,6 +345,35 @@ def run_openai_study_draft_poc(
         output_text_sha256=hashlib.sha256(output_text.encode("utf-8")).hexdigest(),
     )
     return result
+
+
+
+def _inject_host_source_snapshot_path(
+    *,
+    output_text: str,
+    bundle: StudyDraftRequestBundle,
+) -> str:
+    """Replace only the exact host-path sentinel with the immutable bundle value.
+
+    Invalid JSON or an unexpected model-supplied path is left untouched so the
+    normal schema/bundle gates reject it. This avoids trusting model-generated
+    filesystem paths while preserving the original raw response for audit.
+    """
+
+    try:
+        payload = json.loads(output_text)
+    except json.JSONDecodeError:
+        return output_text
+    if not isinstance(payload, dict):
+        return output_text
+    source = payload.get("source")
+    if not isinstance(source, dict):
+        return output_text
+    if source.get("source_snapshot_path") != HOST_SOURCE_SNAPSHOT_PATH_SENTINEL:
+        return output_text
+
+    source["source_snapshot_path"] = bundle.source.source_snapshot_path
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
 def _bundle_binding_issue_codes(
