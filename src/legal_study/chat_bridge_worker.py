@@ -492,11 +492,17 @@ def watch_bridge_commands(
             if now - unchanged_since < stable_seconds:
                 continue
 
-            registrar = (
-                notion_registrar_factory()
-                if notion_registrar_factory is not None
-                else None
-            )
+            registrar = None
+            if notion_registrar_factory is not None:
+                preview = BridgeCommand.model_validate_json(
+                    path.read_text(encoding="utf-8")
+                )
+                if preview.action in {
+                    BridgeAction.REGISTER_NOTION,
+                    BridgeAction.APPLY_ALL,
+                }:
+                    registrar = notion_registrar_factory()
+
             yield process_bridge_command(
                 command_path=path,
                 bridge_root=layout.root,
