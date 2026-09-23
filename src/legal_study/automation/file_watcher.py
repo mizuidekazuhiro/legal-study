@@ -83,7 +83,7 @@ class FileUpdateWatcher:
 def iter_file_updates(
     path: str | Path,
     *,
-    poll_interval_seconds: float = 2.0,
+    poll_interval_seconds: float = 60.0,
 ) -> Iterator[FileUpdateEvent]:
     if poll_interval_seconds <= 0:
         raise ValueError("poll_interval_seconds must be > 0")
