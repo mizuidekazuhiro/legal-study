@@ -39,6 +39,7 @@ class StudyDraftRequestBundle(StrictBundleModel):
     handoff: BundleTextDocument
     instructions: list[BundleTextDocument] = Field(min_length=1)
     review_sheets: list[BundleReviewImage] = Field(default_factory=list)
+    primary_text_review_required_pages: list[int] = Field(default_factory=list)
     response_schema: dict[str, Any]
     response_schema_sha256: str = Field(min_length=64, max_length=64)
     output_filename: Literal["study_draft.json"] = "study_draft.json"
@@ -143,6 +144,14 @@ def build_study_draft_request_bundle(
         handoff_frontmatter=handoff_frontmatter,
     )
 
+    primary_text_review_required_pages = sorted(
+        int(page["page_number"])
+        for page in canonical.get("pages", [])
+        if isinstance(page, dict)
+        and page.get("page_number") is not None
+        and int(page.get("repair_review_count", 0)) > 0
+    )
+
     sheets = canonical.get("handoff_review_sheets", {})
     if not isinstance(sheets, dict):
         raise TypeError("canonical_source.json handoff_review_sheets must be an object")
@@ -191,6 +200,7 @@ def build_study_draft_request_bundle(
         handoff=handoff,
         instructions=instructions,
         review_sheets=review_sheets,
+        primary_text_review_required_pages=primary_text_review_required_pages,
         response_schema=schema,
         response_schema_sha256=hashlib.sha256(schema_bytes).hexdigest(),
     )
