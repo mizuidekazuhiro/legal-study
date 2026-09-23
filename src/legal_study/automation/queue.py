@@ -10,6 +10,8 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from legal_study.source_store import SourceSnapshot
+
 
 class WorkStatus(StrEnum):
     PENDING = "PENDING"
@@ -24,9 +26,12 @@ class WorkItem(BaseModel):
     question: str
     source_sha256: str
     stable_page_ids: list[str] = Field(default_factory=list)
+    source_snapshot: SourceSnapshot | None = None
     status: WorkStatus
     attempt_count: int = 0
     last_error: str | None = None
+    output_dir: str | None = None
+    run_id: str | None = None
     created_at: str
     updated_at: str
 
@@ -86,15 +91,33 @@ class AutomationStateStore:
                     question TEXT NOT NULL,
                     source_sha256 TEXT NOT NULL,
                     stable_page_ids_json TEXT NOT NULL DEFAULT '[]',
+                    source_snapshot_json TEXT,
                     status TEXT NOT NULL,
                     attempt_count INTEGER NOT NULL DEFAULT 0,
                     last_error TEXT,
+                    output_dir TEXT,
+                    run_id TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     UNIQUE (subject, question, source_sha256)
                 )
                 """
             )
+            columns = {
+                row["name"]
+                for row in connection.execute(
+                    "PRAGMA table_info(automation_work_queue)"
+                ).fetchall()
+            }
+            for name, definition in (
+                ("source_snapshot_json", "TEXT"),
+                ("output_dir", "TEXT"),
+                ("run_id", "TEXT"),
+            ):
+                if name not in columns:
+                    connection.execute(
+                        f"ALTER TABLE automation_work_queue ADD COLUMN {name} {definition}"
+                    )
 
     @staticmethod
     def _work_item(row: sqlite3.Row) -> WorkItem:
@@ -104,9 +127,16 @@ class AutomationStateStore:
             question=row["question"],
             source_sha256=row["source_sha256"],
             stable_page_ids=json.loads(row["stable_page_ids_json"]),
+            source_snapshot=(
+                SourceSnapshot.model_validate_json(row["source_snapshot_json"])
+                if row["source_snapshot_json"]
+                else None
+            ),
             status=WorkStatus(row["status"]),
             attempt_count=int(row["attempt_count"]),
             last_error=row["last_error"],
+            output_dir=row["output_dir"],
+            run_id=row["run_id"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )
@@ -163,16 +193,21 @@ class AutomationStateStore:
         question: str,
         source_sha256: str,
         stable_page_ids: list[str],
+        source_snapshot: SourceSnapshot | None = None,
     ) -> WorkItem:
         now = self._now()
         pages_json = json.dumps(stable_page_ids, ensure_ascii=False, sort_keys=True)
+        snapshot_json = (
+            source_snapshot.model_dump_json() if source_snapshot is not None else None
+        )
         with self._connect() as connection:
             connection.execute(
                 """
                 INSERT INTO automation_work_queue (
                     subject, question, source_sha256, stable_page_ids_json,
-                    status, attempt_count, last_error, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, 0, NULL, ?, ?)
+                    source_snapshot_json, status, attempt_count, last_error,
+                    output_dir, run_id, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 0, NULL, NULL, NULL, ?, ?)
                 ON CONFLICT(subject, question, source_sha256) DO NOTHING
                 """,
                 (
@@ -180,6 +215,7 @@ class AutomationStateStore:
                     question,
                     source_sha256,
                     pages_json,
+                    snapshot_json,
                     WorkStatus.PENDING.value,
                     now,
                     now,
@@ -246,8 +282,33 @@ class AutomationStateStore:
         assert updated is not None
         return self._work_item(updated)
 
-    def mark_completed(self, item_id: int) -> WorkItem:
-        return self._set_terminal(item_id, WorkStatus.COMPLETED, None)
+    def mark_completed(
+        self,
+        item_id: int,
+        *,
+        output_dir: str | Path | None = None,
+        run_id: str | None = None,
+    ) -> WorkItem:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE automation_work_queue
+                SET status = ?, last_error = NULL, output_dir = ?, run_id = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    WorkStatus.COMPLETED.value,
+                    str(Path(output_dir).resolve()) if output_dir is not None else None,
+                    run_id,
+                    self._now(),
+                    item_id,
+                ),
+            )
+        item = self.get_work_item(item_id)
+        if item is None:
+            raise KeyError(f"Work item not found: {item_id}")
+        return item
 
     def mark_failed(self, item_id: int, error: str) -> WorkItem:
         return self._set_terminal(item_id, WorkStatus.FAILED, error)
