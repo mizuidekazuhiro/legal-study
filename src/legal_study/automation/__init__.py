@@ -21,6 +21,11 @@ from legal_study.automation.queue import (
     WorkItem,
     WorkStatus,
 )
+from legal_study.automation.worker import (
+    QueueWorkerResult,
+    drain_pending_work,
+    process_next_work_item,
+)
 from legal_study.automation.sync_stability import (
     FileObservation,
     SyncStabilityResult,
@@ -36,6 +41,7 @@ __all__ = [
     "FileUpdateEvent",
     "FileUpdateWatcher",
     "QuestionAutomationResult",
+    "QueueWorkerResult",
     "SyncStabilityResult",
     "WatchState",
     "WatchedFileSignature",
@@ -46,8 +52,10 @@ __all__ = [
     "iter_file_updates",
     "mark_question_sync_stable",
     "mark_question_sync_stable_from_verified_hash",
+    "process_next_work_item",
     "process_pdf_update",
     "recover_watch_startup",
+    "drain_pending_work",
     "wait_for_sync_stable",
     "watch_pdf_updates",
 ]
