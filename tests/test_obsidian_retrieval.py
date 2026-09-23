@@ -95,3 +95,25 @@ def test_conflicting_duplicate_pattern_id_is_rejected(tmp_path) -> None:
         assert "Conflicting duplicate Obsidian pattern_id" in str(exc)
     else:
         raise AssertionError("Expected conflicting duplicate pattern_id to be rejected")
+
+
+def test_exact_pattern_id_does_not_prefix_match_other_ids(tmp_path) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+
+    first = _PATTERN
+    second = _PATTERN.replace("刑3", "刑30").replace(
+        "間接正犯の実行行為性",
+        "中止行為と結果不発生との間の因果関係の要否（不要説）",
+    )
+    (vault / "刑003.md").write_text(first, encoding="utf-8")
+    (vault / "刑030.md").write_text(second, encoding="utf-8")
+
+    patterns, attempts = search_obsidian_argument_patterns(
+        vault_dir=vault,
+        queries=["刑3"],
+        subject="刑法",
+    )
+
+    assert [pattern.pattern_id for pattern in patterns] == ["刑3"]
+    assert attempts[0].matched_ids == ["刑3"]
