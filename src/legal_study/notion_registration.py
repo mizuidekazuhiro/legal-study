@@ -7,12 +7,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from legal_study.chat_bridge_worker import NotionRegistrationResult
-from legal_study.chat_result import (
-    ChatAnkiCard,
-    expanded_anki_cards,
-    load_chat_result,
-)
+from legal_study import chat_bridge_worker, chat_result
 from legal_study.run_manifest import RunManifest
 
 
@@ -93,8 +88,8 @@ class LegalQuestionBankRegistrar:
         *,
         result_path: Path,
         run_dir: Path,
-    ) -> NotionRegistrationResult:
-        result = load_chat_result(result_path)
+    ) -> chat_bridge_worker.NotionRegistrationResult:
+        result = chat_result.load_chat_result(result_path)
         run_root = run_dir.expanduser().resolve()
         manifest = RunManifest.model_validate_json(
             (run_root / "run_manifest.json").read_text(encoding="utf-8")
@@ -106,7 +101,7 @@ class LegalQuestionBankRegistrar:
         ):
             raise RuntimeError("Chat result identity does not match local run")
 
-        cards = expanded_anki_cards(result)
+        cards = chat_result.expanded_anki_cards(result)
         client = self._client()
         preflight = self._preflight(client=client, cards=cards)
         if preflight.duplicate_names:
@@ -122,7 +117,7 @@ class LegalQuestionBankRegistrar:
 
         created: list[NotionCardReceipt] = []
         for raw in cards:
-            card = ChatAnkiCard.model_validate(raw)
+            card = chat_result.ChatAnkiCard.model_validate(raw)
             properties = self._properties(card)
             page = client.pages.create(
                 parent={"data_source_id": self.data_source_id},
@@ -140,7 +135,7 @@ class LegalQuestionBankRegistrar:
                 )
             )
 
-        return NotionRegistrationResult(
+        return chat_bridge_worker.NotionRegistrationResult(
             status="REGISTERED_AND_VERIFIED",
             created=len(created),
             verified=sum(1 for item in created if item.verified),
@@ -159,7 +154,7 @@ class LegalQuestionBankRegistrar:
 
         invalid_options: list[str] = []
         for raw in cards:
-            card = ChatAnkiCard.model_validate(raw)
+            card = chat_result.ChatAnkiCard.model_validate(raw)
             for property_name, value in (
                 ("Subject", card.subject),
                 ("Anki Deck", card.anki_deck),
@@ -176,7 +171,7 @@ class LegalQuestionBankRegistrar:
 
         duplicate_names: list[str] = []
         for raw in cards:
-            card = ChatAnkiCard.model_validate(raw)
+            card = chat_result.ChatAnkiCard.model_validate(raw)
             response = client.data_sources.query(
                 data_source_id=self.data_source_id,
                 filter={
@@ -195,7 +190,7 @@ class LegalQuestionBankRegistrar:
             invalid_options=invalid_options,
         )
 
-    def _properties(self, card: ChatAnkiCard) -> dict[str, Any]:
+    def _properties(self, card: chat_result.ChatAnkiCard) -> dict[str, Any]:
         if card.extra is None:
             raise RuntimeError(f"Expanded card is missing Extra: {card.name}")
         return {
@@ -216,7 +211,7 @@ class LegalQuestionBankRegistrar:
             "PDF Page": {"number": card.pdf_page_number},
         }
 
-    def _verify_page(self, page: dict[str, Any], card: ChatAnkiCard) -> None:
+    def _verify_page(self, page: dict[str, Any], card: chat_result.ChatAnkiCard) -> None:
         properties = page.get("properties", {})
         expected_text = {
             "Name": card.name,
