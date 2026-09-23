@@ -162,3 +162,32 @@ def test_problem_packet_resume_keeps_outputs_byte_identical(tmp_path: Path) -> N
     after = {name: (prepared.output_dir / name).read_bytes() for name in names}
 
     assert before == after
+
+
+def test_problem_packet_resume_regenerates_missing_review_sheet(tmp_path: Path) -> None:
+    source = tmp_path / "marked.pdf"
+    _marked_pdf(source)
+    settings = LocalSettings(home=tmp_path / "home")
+    snapshot = snapshot_source(source, settings=settings)
+    pipeline = PdfIngestPipeline()
+    prepared = prepare_run(
+        snapshot=snapshot,
+        subject="criminal",
+        question="review-resume",
+        pages=[1],
+        pipeline_config=pipeline.input_config(),
+        settings=settings,
+    )
+
+    pipeline.run(snapshot, prepared, pages=[1])
+    review_sheet = prepared.output_dir / "handoff_review/page-0001-review.png"
+    assert review_sheet.is_file()
+    original = review_sheet.read_bytes()
+
+    review_sheet.unlink()
+    assert not review_sheet.exists()
+
+    pipeline.run(snapshot, prepared, pages=[1])
+
+    assert review_sheet.is_file()
+    assert review_sheet.read_bytes() == original
