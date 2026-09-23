@@ -32,6 +32,7 @@ _ALLOWED_TRANSITIONS: dict[QuestionStatus, set[QuestionStatus]] = {
     },
     QuestionStatus.PROCESSING: {
         QuestionStatus.IN_PROGRESS,
+        QuestionStatus.SYNC_STABLE,
         QuestionStatus.REVIEW_READY,
     },
     QuestionStatus.REVIEW_READY: {
