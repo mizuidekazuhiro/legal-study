@@ -9,6 +9,13 @@ from legal_study.openai_request import (
     make_openai_strict_schema,
 )
 from legal_study.study_draft import DraftSource
+from legal_study.supplemental_retrieval import (
+    NotionStatuteRecord,
+    ObsidianArgumentPattern,
+    SupplementalRetrievalBundle,
+    SupplementalSearchAttempt,
+    sha256_text,
+)
 from legal_study.study_draft_request import (
     build_study_draft_request_bundle,
     required_instruction_names,
@@ -278,3 +285,54 @@ def test_request_schema_binds_immutable_source_values(tmp_path: Path) -> None:
     assert source["problem_validation_path"]["enum"] == [
         "problem_validation.json"
     ]
+
+
+def test_request_renders_obsidian_patterns_and_notion_statutes_without_navigate_pdf(
+    tmp_path: Path,
+) -> None:
+    run_dir, base_bundle = _bundle(tmp_path)
+    pattern_body = "危険の現実化を基準として因果関係を判断する。"
+    supplemental = SupplementalRetrievalBundle(
+        subject="criminal",
+        question="22",
+        search_attempts=[
+            SupplementalSearchAttempt(
+                source="obsidian_argument_pattern",
+                query="因果関係",
+                matched_ids=["刑001"],
+            )
+        ],
+        argument_patterns=[
+            ObsidianArgumentPattern(
+                pattern_id="刑001",
+                aliases=["因果関係"],
+                title="因果関係",
+                body=pattern_body,
+                related_statutes=["刑法199条"],
+                source_path="20_論証パターン/刑法/刑001_因果関係.md",
+                source_sha256=sha256_text(pattern_body),
+            )
+        ],
+        statutes=[
+            NotionStatuteRecord(
+                record_id="statute-199",
+                law_name="刑法",
+                article="199条",
+                text="人を殺した者は、死刑又は無期若しくは五年以上の拘禁刑に処する。",
+                notion_url="https://www.notion.so/statute-199",
+            )
+        ],
+    )
+    bundle = base_bundle.model_copy(update={"supplemental": supplemental})
+
+    request = build_openai_responses_request_template(
+        bundle=bundle,
+        run_dir=run_dir,
+    )
+    text = request.payload["input"][0]["content"][0]["text"]
+
+    assert "BEGIN OBSIDIAN ARGUMENT PATTERN 刑001" in text
+    assert pattern_body in text
+    assert "BEGIN NOTION STATUTE statute-199" in text
+    assert "論文ナビゲートテキスト PDF" in text
+    assert "Do not require or request" in text
