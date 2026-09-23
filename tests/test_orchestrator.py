@@ -2,7 +2,8 @@ from pathlib import Path
 
 import pymupdf
 
-from legal_study.automation.orchestrator import process_pdf_update
+from legal_study.automation.orchestrator import process_pdf_update, recover_watch_startup
+from legal_study.automation.queue import AutomationStateStore, WorkStatus
 from legal_study.completion.done_marker import done_stamp_png_bytes
 from legal_study.page_identity import ensure_source_page_index
 from legal_study.pdf.ocr.base import OcrLine, OcrResult
@@ -108,3 +109,128 @@ def test_process_pdf_update_without_done_only_advances_baseline(tmp_path: Path) 
     assert result.detected_done_pages == []
     assert result.questions == []
     assert QuestionStateStore(settings.state_db).get("criminal", "22") is None
+
+
+
+def test_process_pdf_update_enqueues_sync_stable_question(tmp_path: Path) -> None:
+    source = tmp_path / "source.pdf"
+    settings = LocalSettings(home=tmp_path / "home")
+    _write_pdf(source)
+
+    baseline_snapshot = snapshot_source(source, settings=settings)
+    baseline = ensure_source_page_index(baseline_snapshot, settings.cache_dir)
+
+    _write_pdf(source, done=True)
+
+    _current, result = process_pdf_update(
+        source,
+        subject="criminal",
+        ocr_engine=HeaderOcr(),
+        previous_index=baseline,
+        settings=settings,
+        interval_seconds=0,
+        required_equal_observations=2,
+        timeout_seconds=1,
+    )
+
+    assert result.questions[0].queue_status == WorkStatus.PENDING
+    queue = AutomationStateStore(settings.state_db)
+    pending = queue.list_pending()
+    assert len(pending) == 1
+    assert pending[0].question == "22"
+    assert pending[0].source_sha256 == result.current_source_sha256
+
+
+def test_restart_recovery_processes_pdf_changed_while_watcher_was_off(tmp_path: Path) -> None:
+    source = tmp_path / "source.pdf"
+    settings = LocalSettings(home=tmp_path / "home")
+    _write_pdf(source)
+
+    baseline_snapshot = snapshot_source(source, settings=settings)
+    baseline = ensure_source_page_index(baseline_snapshot, settings.cache_dir)
+    automation = AutomationStateStore(settings.state_db)
+    automation.set_watch_baseline("criminal", source, baseline.source_sha256)
+
+    _write_pdf(source, done=True)
+
+    current, result = recover_watch_startup(
+        source,
+        subject="criminal",
+        ocr_engine=HeaderOcr(),
+        settings=settings,
+        stability_interval_seconds=0,
+        stability_equal_observations=2,
+        stability_timeout_seconds=1,
+    )
+
+    assert current is not None
+    assert current.source_sha256 != baseline.source_sha256
+    assert result.reason == "PROCESSED_STABLE_UPDATE"
+    assert result.detected_done_pages == [3]
+    assert result.questions[0].question == "22"
+    assert result.questions[0].status == QuestionStatus.SYNC_STABLE
+    assert result.questions[0].queue_status == WorkStatus.PENDING
+
+    watch_state = automation.get_watch_state("criminal", source)
+    assert watch_state is not None
+    assert watch_state.last_processed_sha256 == current.source_sha256
+
+
+def test_restart_recovery_returns_running_queue_item_to_pending(tmp_path: Path) -> None:
+    source = tmp_path / "source.pdf"
+    settings = LocalSettings(home=tmp_path / "home")
+    _write_pdf(source)
+
+    snapshot = snapshot_source(source, settings=settings)
+    baseline = ensure_source_page_index(snapshot, settings.cache_dir)
+    automation = AutomationStateStore(settings.state_db)
+    automation.set_watch_baseline("criminal", source, baseline.source_sha256)
+    automation.enqueue(
+        subject="criminal",
+        question="21",
+        source_sha256="old-sha",
+        stable_page_ids=["p1"],
+    )
+    claimed = automation.claim_next()
+    assert claimed is not None
+    assert claimed.status == WorkStatus.RUNNING
+
+    current, result = recover_watch_startup(
+        source,
+        subject="criminal",
+        ocr_engine=HeaderOcr(),
+        settings=settings,
+        stability_interval_seconds=0,
+        stability_equal_observations=2,
+        stability_timeout_seconds=1,
+    )
+
+    assert current is not None
+    assert result.reason == "PERSISTED_BASELINE_UNCHANGED"
+    assert result.recovered_work_items == 1
+    pending = automation.list_pending()
+    assert len(pending) == 1
+    assert pending[0].question == "21"
+
+
+def test_first_watch_startup_establishes_baseline_without_historical_replay(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.pdf"
+    settings = LocalSettings(home=tmp_path / "home")
+    _write_pdf(source, done=True)
+
+    current, result = recover_watch_startup(
+        source,
+        subject="criminal",
+        ocr_engine=HeaderOcr(),
+        settings=settings,
+        stability_interval_seconds=0,
+        stability_equal_observations=2,
+        stability_timeout_seconds=1,
+    )
+
+    assert current is not None
+    assert result.reason == "INITIAL_BASELINE_ESTABLISHED"
+    assert result.questions == []
+    assert AutomationStateStore(settings.state_db).list_pending() == []
