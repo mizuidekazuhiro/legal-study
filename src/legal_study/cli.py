@@ -10,6 +10,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from legal_study.completion.done_marker import detect_done_markers, save_done_stamp
 from legal_study.finalize import finalize_existing_run
 from legal_study.io_utils import atomic_write_text
 from legal_study.page_identity import (
@@ -47,6 +48,50 @@ def _parse_pages(value: str | None) -> list[int] | None:
         else:
             pages.add(int(part))
     return sorted(pages)
+
+
+@app.command("make-done-stamp")
+def make_done_stamp(
+    output: Annotated[Path, typer.Argument(help="PNG path to create.")],
+) -> None:
+    """Create the canonical Goodnotes DONE stamp PNG."""
+    digest = save_done_stamp(output)
+    console.print(
+        json.dumps(
+            {
+                "output": str(output.expanduser().resolve()),
+                "sha256": digest,
+                "stamp_version": "LEGAL-STUDY-DONE-V1",
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+
+@app.command("detect-done")
+def detect_done(
+    pdf: Annotated[Path, typer.Argument(exists=True, readable=True)],
+    pages: Annotated[
+        str | None,
+        typer.Option(help="1-based pages, e.g. 110-116,120"),
+    ] = None,
+) -> None:
+    """Detect the canonical DONE stamp on selected PDF pages."""
+    results = detect_done_markers(pdf, pages=_parse_pages(pages))
+    console.print(
+        json.dumps(
+            {
+                "pdf": str(pdf),
+                "detected_pages": [
+                    item.page_number for item in results if item.detected
+                ],
+                "results": [item.model_dump(mode="json") for item in results],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
 
 
 @app.command()
