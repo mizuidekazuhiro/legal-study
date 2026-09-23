@@ -7,6 +7,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 from legal_study.automation.file_watcher import FileUpdateEvent, FileUpdateWatcher
+from legal_study.automation.queue import AutomationStateStore, WorkStatus
 from legal_study.automation.sync_stability import (
     SyncStabilityResult,
     mark_question_sync_stable_from_verified_hash,
@@ -21,11 +22,12 @@ from legal_study.page_identity import (
     SourcePageIndex,
     align_page_indexes,
     ensure_source_page_index,
+    load_source_page_index,
 )
 from legal_study.pdf.ocr.base import OcrEngine
 from legal_study.settings import LocalSettings
 from legal_study.source_store import snapshot_source
-from legal_study.state import QuestionStatus
+from legal_study.state import QuestionStateStore, QuestionStatus
 
 
 class QuestionAutomationResult(BaseModel):
@@ -33,6 +35,8 @@ class QuestionAutomationResult(BaseModel):
     done_page: int
     status: QuestionStatus | None = None
     sync_state_updated: bool = False
+    queue_item_id: int | None = None
+    queue_status: WorkStatus | None = None
 
 
 class AutomationCycleResult(BaseModel):
@@ -42,6 +46,7 @@ class AutomationCycleResult(BaseModel):
     stable_sha256: str | None = None
     baseline_source_sha256: str | None = None
     current_source_sha256: str | None = None
+    recovered_work_items: int = 0
     alignment_counts: dict[str, int] = Field(default_factory=dict)
     candidate_pages: list[int] = Field(default_factory=list)
     detected_done_pages: list[int] = Field(default_factory=list)
@@ -164,6 +169,8 @@ def process_pdf_update(
         item.done_detection.page_number for item in completions if item.done_detection.detected
     )
 
+    question_state = QuestionStateStore(cfg.state_db)
+    automation_state = AutomationStateStore(cfg.state_db)
     for item in completions:
         question = item.resolution.question
         if question is None:
@@ -179,15 +186,130 @@ def process_pdf_update(
             )
             status = synced.current_status
             sync_updated = synced.state_updated
+
+        queue_item_id = None
+        queue_status = None
+        if status == QuestionStatus.SYNC_STABLE:
+            record = question_state.get(subject, question)
+            if record is not None and record.latest_source_sha256 == stable.sha256:
+                queued = automation_state.enqueue(
+                    subject=subject,
+                    question=question,
+                    source_sha256=stable.sha256,
+                    stable_page_ids=record.stable_page_ids,
+                )
+                queue_item_id = queued.id
+                queue_status = queued.status
+
         result.questions.append(
             QuestionAutomationResult(
                 question=question,
                 done_page=item.done_detection.page_number,
                 status=status,
                 sync_state_updated=sync_updated,
+                queue_item_id=queue_item_id,
+                queue_status=queue_status,
             )
         )
     return current_index, result
+
+
+def recover_watch_startup(
+    pdf: str | Path,
+    *,
+    subject: str,
+    ocr_engine: OcrEngine,
+    settings: LocalSettings | None = None,
+    stability_interval_seconds: float = 5.0,
+    stability_equal_observations: int = 3,
+    stability_timeout_seconds: float = 90.0,
+    max_backtrack: int = 16,
+) -> tuple[SourcePageIndex | None, AutomationCycleResult]:
+    """Restore interrupted work and process PDF changes missed while Windows was off."""
+    cfg = settings or LocalSettings()
+    cfg.ensure()
+    source_path = str(Path(pdf).expanduser().resolve())
+    automation_state = AutomationStateStore(cfg.state_db)
+    recovered = automation_state.recover_interrupted()
+
+    current_index, stable = establish_stable_baseline(
+        pdf,
+        settings=cfg,
+        interval_seconds=stability_interval_seconds,
+        required_equal_observations=stability_equal_observations,
+        timeout_seconds=stability_timeout_seconds,
+    )
+    if current_index is None:
+        return None, AutomationCycleResult(
+            source_path=source_path,
+            reason=stable.reason,
+            stable=False,
+            stable_sha256=stable.sha256,
+            recovered_work_items=recovered,
+        )
+
+    watch_state = automation_state.get_watch_state(subject, pdf)
+    if watch_state is None:
+        automation_state.set_watch_baseline(
+            subject,
+            pdf,
+            current_index.source_sha256,
+        )
+        return current_index, AutomationCycleResult(
+            source_path=source_path,
+            reason="INITIAL_BASELINE_ESTABLISHED",
+            stable=True,
+            stable_sha256=current_index.source_sha256,
+            current_source_sha256=current_index.source_sha256,
+            recovered_work_items=recovered,
+        )
+
+    if watch_state.last_processed_sha256 == current_index.source_sha256:
+        return current_index, AutomationCycleResult(
+            source_path=source_path,
+            reason="PERSISTED_BASELINE_UNCHANGED",
+            stable=True,
+            stable_sha256=current_index.source_sha256,
+            baseline_source_sha256=watch_state.last_processed_sha256,
+            current_source_sha256=current_index.source_sha256,
+            recovered_work_items=recovered,
+        )
+
+    try:
+        previous_index = load_source_page_index(
+            cfg.cache_dir,
+            watch_state.last_processed_sha256,
+        )
+    except FileNotFoundError:
+        return None, AutomationCycleResult(
+            source_path=source_path,
+            reason="PERSISTED_BASELINE_INDEX_MISSING",
+            stable=True,
+            stable_sha256=current_index.source_sha256,
+            baseline_source_sha256=watch_state.last_processed_sha256,
+            current_source_sha256=current_index.source_sha256,
+            recovered_work_items=recovered,
+        )
+
+    processed_index, result = process_pdf_update(
+        pdf,
+        subject=subject,
+        ocr_engine=ocr_engine,
+        previous_index=previous_index,
+        settings=cfg,
+        interval_seconds=stability_interval_seconds,
+        required_equal_observations=stability_equal_observations,
+        timeout_seconds=stability_timeout_seconds,
+        max_backtrack=max_backtrack,
+    )
+    result.recovered_work_items = recovered
+    if result.stable and result.current_source_sha256 == processed_index.source_sha256:
+        automation_state.set_watch_baseline(
+            subject,
+            pdf,
+            processed_index.source_sha256,
+        )
+    return processed_index, result
 
 
 def watch_pdf_updates(
@@ -202,28 +324,27 @@ def watch_pdf_updates(
     stability_timeout_seconds: float = 90.0,
     max_backtrack: int = 16,
 ) -> Iterator[AutomationCycleResult]:
-    """Continuously watch one PDF and yield a result for each detected update."""
+    """Continuously watch one PDF, including changes missed during downtime."""
     if poll_interval_seconds <= 0:
         raise ValueError("poll_interval_seconds must be > 0")
 
     cfg = settings or LocalSettings()
     cfg.ensure()
-    baseline, stable = establish_stable_baseline(
+    baseline, startup = recover_watch_startup(
         pdf,
+        subject=subject,
+        ocr_engine=ocr_engine,
         settings=cfg,
-        interval_seconds=stability_interval_seconds,
-        required_equal_observations=stability_equal_observations,
-        timeout_seconds=stability_timeout_seconds,
+        stability_interval_seconds=stability_interval_seconds,
+        stability_equal_observations=stability_equal_observations,
+        stability_timeout_seconds=stability_timeout_seconds,
+        max_backtrack=max_backtrack,
     )
+    yield startup
     if baseline is None:
-        yield AutomationCycleResult(
-            source_path=str(Path(pdf).expanduser().resolve()),
-            reason=stable.reason,
-            stable=False,
-            stable_sha256=stable.sha256,
-        )
         return
 
+    automation_state = AutomationStateStore(cfg.state_db)
     watcher = FileUpdateWatcher(pdf)
     while True:
         time.sleep(poll_interval_seconds)
@@ -242,4 +363,10 @@ def watch_pdf_updates(
             timeout_seconds=stability_timeout_seconds,
             max_backtrack=max_backtrack,
         )
+        if result.stable and result.current_source_sha256 == baseline.source_sha256:
+            automation_state.set_watch_baseline(
+                subject,
+                pdf,
+                baseline.source_sha256,
+            )
         yield result
