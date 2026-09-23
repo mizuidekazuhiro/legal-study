@@ -98,7 +98,7 @@ review_issue_count: 0
         )
 
 
-def _draft_payload() -> dict[str, object]:
+def _draft_payload(bundle=None) -> dict[str, object]:
     evidence = {
         "evidence_id": "page:110:primary_text",
         "page_number": 110,
@@ -121,12 +121,19 @@ def _draft_payload() -> dict[str, object]:
             "canonical_source_path": "canonical_source.json",
             "problem_validation_path": "problem_validation.json",
         },
-        "instruction_sources": [
-            {
-                "name": "00_論文作成・登録_本番_プロジェクト指示.md",
-                "sha256": None,
-            }
-        ],
+        "instruction_sources": (
+            [
+                {"name": item.name, "sha256": item.sha256}
+                for item in bundle.instructions
+            ]
+            if bundle is not None
+            else [
+                {
+                    "name": "00_論文作成・登録_本番_プロジェクト指示.md",
+                    "sha256": None,
+                }
+            ]
+        ),
         "visual_reviews": [
             {
                 "page_number": 110,
@@ -243,7 +250,7 @@ def test_one_question_poc_calls_responses_once_and_accepts_candidate(tmp_path: P
     run_dir, bundle = _bundle(tmp_path)
     client = FakeClient(
         _response(
-            output_text=json.dumps(_draft_payload(), ensure_ascii=False),
+            output_text=json.dumps(_draft_payload(bundle), ensure_ascii=False),
         )
     )
 
@@ -336,7 +343,7 @@ def test_invalid_model_output_flows_through_acceptance_gate(tmp_path: Path) -> N
 def test_existing_receipt_prevents_accidental_second_api_call(tmp_path: Path) -> None:
     run_dir, bundle = _bundle(tmp_path)
     first_client = FakeClient(
-        _response(output_text=json.dumps(_draft_payload(), ensure_ascii=False))
+        _response(output_text=json.dumps(_draft_payload(bundle), ensure_ascii=False))
     )
     first = run_openai_study_draft_poc(
         bundle=bundle,
@@ -346,7 +353,7 @@ def test_existing_receipt_prevents_accidental_second_api_call(tmp_path: Path) ->
     assert first.accepted is True
 
     second_client = FakeClient(
-        _response(output_text=json.dumps(_draft_payload(), ensure_ascii=False))
+        _response(output_text=json.dumps(_draft_payload(bundle), ensure_ascii=False))
     )
     with pytest.raises(RuntimeError, match="API receipt already exists"):
         run_openai_study_draft_poc(
@@ -442,3 +449,39 @@ def test_bundle_can_be_reconstructed_from_run_manifest_and_question_state(
     assert bundle.source.stable_page_ids == ["stable-110"]
     assert bundle.source.source_sha256 == "a" * 64
     assert bundle.source.handoff_path == "criminal_22_handoff.md"
+
+
+def test_response_source_must_match_request_bundle(tmp_path: Path) -> None:
+    run_dir, bundle = _bundle(tmp_path)
+    payload = _draft_payload(bundle)
+    payload["source"]["stable_page_ids"] = ["invented-stable-id"]
+    client = FakeClient(_response(output_text=json.dumps(payload, ensure_ascii=False)))
+
+    result = run_openai_study_draft_poc(
+        bundle=bundle,
+        run_dir=run_dir,
+        client=client,
+    )
+
+    assert result.accepted is False
+    assert result.reason == "DRAFT_BUNDLE_MISMATCH"
+    assert "BUNDLE_SOURCE_MISMATCH" in result.acceptance_issue_codes
+    assert not (run_dir / "study_draft.json").exists()
+
+
+def test_response_instruction_sources_must_match_request_bundle(tmp_path: Path) -> None:
+    run_dir, bundle = _bundle(tmp_path)
+    payload = _draft_payload(bundle)
+    payload["instruction_sources"] = payload["instruction_sources"][:-1]
+    client = FakeClient(_response(output_text=json.dumps(payload, ensure_ascii=False)))
+
+    result = run_openai_study_draft_poc(
+        bundle=bundle,
+        run_dir=run_dir,
+        client=client,
+    )
+
+    assert result.accepted is False
+    assert result.reason == "DRAFT_BUNDLE_MISMATCH"
+    assert "BUNDLE_INSTRUCTION_SOURCES_MISMATCH" in result.acceptance_issue_codes
+    assert not (run_dir / "study_draft.json").exists()
