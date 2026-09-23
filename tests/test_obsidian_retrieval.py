@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import pytest
 
 from legal_study.obsidian_retrieval import search_obsidian_argument_patterns
@@ -34,7 +32,7 @@ topic: 実行行為・間接正犯
 """
 
 
-def test_search_reads_registered_pattern_without_opening_source_pdf(tmp_path: Path) -> None:
+def test_search_reads_registered_pattern_without_opening_source_pdf(tmp_path) -> None:
     vault = tmp_path / "vault"
     note = vault / "10_論証パターン/03_刑法/刑003_間接正犯の実行行為性.md"
     note.parent.mkdir(parents=True)
@@ -59,7 +57,7 @@ def test_search_reads_registered_pattern_without_opening_source_pdf(tmp_path: Pa
     assert attempts[0].matched_ids == ["刑3"]
 
 
-def test_search_ignores_non_pattern_and_other_subject(tmp_path: Path) -> None:
+def test_search_ignores_non_pattern_and_other_subject(tmp_path) -> None:
     vault = tmp_path / "vault"
     vault.mkdir()
     (vault / "problem.md").write_text(
@@ -81,7 +79,7 @@ def test_search_ignores_non_pattern_and_other_subject(tmp_path: Path) -> None:
     assert attempts[0].matched_ids == []
 
 
-def test_conflicting_duplicate_pattern_id_is_rejected(tmp_path: Path) -> None:
+def test_conflicting_duplicate_pattern_id_is_rejected(tmp_path) -> None:
     vault = tmp_path / "vault"
     vault.mkdir()
     (vault / "a.md").write_text(_PATTERN, encoding="utf-8")
