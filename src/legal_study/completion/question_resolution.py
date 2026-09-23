@@ -12,7 +12,7 @@ from legal_study.completion.done_marker import DoneDetection, detect_done_marker
 from legal_study.page_identity import ensure_source_page_index
 from legal_study.pdf.ocr.base import OcrEngine
 from legal_study.settings import LocalSettings
-from legal_study.source_store import snapshot_source
+from legal_study.source_store import SourceSnapshot, snapshot_source
 from legal_study.state import QuestionStateStore, QuestionStatus
 
 _QUESTION_HEADER = re.compile(r"第\s*([0-9]{1,3})\s*問")
@@ -131,8 +131,8 @@ def resolve_question_for_done_page(
     )
 
 
-def apply_done_markers(
-    pdf: str | Path,
+def apply_done_markers_to_snapshot(
+    snapshot: SourceSnapshot,
     *,
     subject: str,
     ocr_engine: OcrEngine,
@@ -140,14 +140,9 @@ def apply_done_markers(
     pages: list[int] | None = None,
     max_backtrack: int = 16,
 ) -> list[CompletionApplyResult]:
-    """Detect DONE markers, resolve their question, and persist DONE_DETECTED.
-
-    Only exact resolutions mutate question workflow state. Ambiguous/unresolved
-    cases are returned to the caller without guessing.
-    """
+    """Apply DONE markers to an already immutable source snapshot."""
     cfg = settings or LocalSettings()
     cfg.ensure()
-    snapshot = snapshot_source(pdf, settings=cfg)
     detections = detect_done_markers(snapshot.snapshot_path, pages=pages)
     detected = [item for item in detections if item.detected]
     if not detected:
@@ -222,3 +217,26 @@ def apply_done_markers(
         )
 
     return results
+
+
+def apply_done_markers(
+    pdf: str | Path,
+    *,
+    subject: str,
+    ocr_engine: OcrEngine,
+    settings: LocalSettings | None = None,
+    pages: list[int] | None = None,
+    max_backtrack: int = 16,
+) -> list[CompletionApplyResult]:
+    """Detect DONE markers, resolve their question, and persist DONE_DETECTED."""
+    cfg = settings or LocalSettings()
+    cfg.ensure()
+    snapshot = snapshot_source(pdf, settings=cfg)
+    return apply_done_markers_to_snapshot(
+        snapshot,
+        subject=subject,
+        ocr_engine=ocr_engine,
+        settings=cfg,
+        pages=pages,
+        max_backtrack=max_backtrack,
+    )
