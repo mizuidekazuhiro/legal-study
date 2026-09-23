@@ -29,8 +29,7 @@ def _run_git(*args: str) -> str | None:
         )
     except (FileNotFoundError, OSError, subprocess.SubprocessError):
         return None
-    value = completed.stdout.strip()
-    return value or None
+    return completed.stdout.strip()
 
 
 def resolve_code_revision() -> CodeRevision:
@@ -40,7 +39,7 @@ def resolve_code_revision() -> CodeRevision:
         return CodeRevision(sha=configured, source="environment", dirty=None)
 
     sha = _run_git("rev-parse", "HEAD")
-    if sha is None:
+    if not sha:
         return CodeRevision(sha=None, source="unavailable", dirty=None)
 
     status = _run_git("status", "--porcelain")
