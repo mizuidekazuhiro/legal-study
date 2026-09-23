@@ -26,11 +26,7 @@ from legal_study.pdf.ocr.base import (
     OcrResult,
 )
 from legal_study.pdf.ocr.cache import SharedOcrCache
-from legal_study.pdf.ocr.routing import (
-    OcrRoutingConfig,
-    routed_image_regions,
-    routed_suspect_native_regions,
-)
+from legal_study.pdf.ocr.routing import OcrRoutingConfig, plan_ocr_targets
 from legal_study.pdf.vector_marks import cluster_red_vector_evidence
 from legal_study.problem_packet import (
     handoff_markdown_filename,
@@ -45,7 +41,7 @@ from legal_study.state import RunStateMissingError, RunStateStore
 
 _STEP_VERSION = "2"
 _PAGE_IDENTITY_STEP_VERSION = "1"
-_OCR_STEP_VERSION = "5"
+_OCR_STEP_VERSION = "6"
 _OCR_CHECKPOINT_SCHEMA_VERSION = 1
 _RECONCILIATION_STEP_VERSION = "3"
 _REPAIR_STEP_VERSION = "2"
@@ -76,7 +72,7 @@ class PdfIngestPipeline:
 
     def input_config(self) -> dict[str, object]:
         return {
-            "pipeline_version": "4",
+            "pipeline_version": "5",
             "min_native_chars": self.inspector.min_native_chars,
             "min_native_quality": self.inspector.min_native_quality,
             "render_dpi": self.inspector.render_dpi,
@@ -555,8 +551,15 @@ class PdfIngestPipeline:
                 out / "ocr_crops",
                 artifact_root=out,
             )
+            ocr_plans = {
+                str(page.page_number): plan_ocr_targets(
+                    page, self.routing_config
+                ).as_dict()
+                for page in inspection.pages
+            }
             payload = {
                 "routing_config": self.routing_config.as_dict(),
+                "ocr_plans": ocr_plans,
                 "review_crops": review_crops,
                 "ocr_targets": ocr_targets,
             }
@@ -633,9 +636,10 @@ class PdfIngestPipeline:
             page_targets: dict[int, tuple[dict[str, object] | None, list[dict[str, object]]]] = {}
             total_targets = 0
             for page in inspection.pages:
+                plan = plan_ocr_targets(page, self.routing_config)
                 full_page_target = (
                     self._full_page_target(page, out)
-                    if page.ocr_recommended and page.rendered_image
+                    if plan.full_page_ocr and page.rendered_image
                     else None
                 )
                 region_targets = list(ocr_targets.get(page.page_number, []))
@@ -645,7 +649,7 @@ class PdfIngestPipeline:
                 )
 
             ocr_results: dict[str, object] = {
-                "schema_version": 5,
+                "schema_version": 6,
                 "native_text_replaced": False,
                 "backend": self._backend_metadata(),
                 "routing_config": self.routing_config.as_dict(),
@@ -664,12 +668,14 @@ class PdfIngestPipeline:
 
             for page in inspection.pages:
                 full_page_target, region_targets = page_targets[page.page_number]
+                plan = plan_ocr_targets(page, self.routing_config)
                 page_result: dict[str, object] = {
                     "routing": {
                         "native_text_preserved": True,
                         "text_layer_trust": page.text_layer_trust.value,
                         "text_layer_origin": page.text_layer_origin.value,
-                        "full_page_ocr": page.ocr_recommended,
+                        "full_page_ocr": plan.full_page_ocr,
+                        "vision_review_recommended": page.vision_review_recommended,
                         "surgical_region_count": sum(
                             target.get("kind") == "suspect_native_text"
                             for target in region_targets
@@ -678,6 +684,11 @@ class PdfIngestPipeline:
                             target.get("kind") == "image_region"
                             for target in region_targets
                         ),
+                        "suppressed_target_count": len(plan.suppressed),
+                        "suppressed_targets": [
+                            item.as_dict() for item in plan.suppressed
+                        ],
+                        "page_profile": plan.profile.as_dict(),
                     }
                 }
 
@@ -1352,11 +1363,9 @@ class PdfIngestPipeline:
         try:
             for inspected_page in inspection.pages:
                 page = document[inspected_page.page_number - 1]
+                plan = plan_ocr_targets(inspected_page, self.routing_config)
                 items: list[dict[str, object]] = []
-                for index, region in enumerate(
-                    routed_suspect_native_regions(inspected_page, self.routing_config),
-                    start=1,
-                ):
+                for index, region in enumerate(plan.surgical_regions, start=1):
                     padding = self.routing_config.surgical_padding_points
                     dpi = self.routing_config.surgical_dpi
                     clip = self._clip_box(page.rect, region.bbox, padding=padding)
@@ -1392,9 +1401,7 @@ class PdfIngestPipeline:
                         )
                     )
 
-                for image_region, reason in routed_image_regions(
-                    inspected_page, self.routing_config
-                ):
+                for image_region, reason in plan.image_regions:
                     padding = self.routing_config.image_padding_points
                     dpi = self.routing_config.image_region_dpi
                     clip = self._clip_box(page.rect, image_region.bbox, padding=padding)
@@ -1432,8 +1439,8 @@ class PdfIngestPipeline:
             document.close()
         return manifest
 
-    @staticmethod
     def _write_review_manifest(
+        self,
         inspection: DocumentInspection,
         path: Path,
         *,
@@ -1462,6 +1469,7 @@ class PdfIngestPipeline:
                         if m.kind == "marker_candidate"
                     ],
                     "suspect_native_regions": [r.model_dump() for r in p.suspect_native_regions],
+                    "ocr_plan": plan_ocr_targets(p, self.routing_config).as_dict(),
                     "ocr_targets": ocr_targets.get(p.page_number, []),
                     "review_crops": review_crops.get(p.page_number, []),
                     "red_vector_regions": [
