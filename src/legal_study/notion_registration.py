@@ -8,7 +8,11 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from legal_study.chat_bridge_worker import NotionRegistrationResult
-from legal_study.chat_result import ChatAnkiCard, expanded_anki_cards, load_chat_result
+from legal_study.chat_result import (
+    ChatAnkiCard,
+    expanded_anki_cards,
+    load_chat_result,
+)
 from legal_study.run_manifest import RunManifest
 
 
