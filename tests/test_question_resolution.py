@@ -143,3 +143,42 @@ def test_unresolved_header_never_changes_question_state(tmp_path: Path) -> None:
     assert results[0].resolution.resolved is False
     assert results[0].current_status is None
     assert QuestionStateStore(settings.state_db).get("criminal", "22") is None
+
+
+def test_ambiguous_nearer_heading_never_falls_back_to_previous_question(
+    tmp_path: Path,
+) -> None:
+    pdf = tmp_path / "source.pdf"
+    _question_pdf(pdf)
+    engine = HeaderOcr({2: "第15問", 4: "第I6問"})
+
+    resolution = resolve_question_for_done_page(
+        pdf,
+        5,
+        ocr_engine=engine,
+        temp_dir=tmp_path / "tmp",
+        max_backtrack=5,
+    )
+
+    assert resolution.resolved is False
+    assert resolution.question is None
+    assert resolution.scanned_pages == [5, 4]
+    assert engine.calls == [5, 4]
+
+
+def test_two_distinct_headings_on_one_page_are_unresolved(tmp_path: Path) -> None:
+    pdf = tmp_path / "source.pdf"
+    _question_pdf(pdf)
+    engine = HeaderOcr({2: "第15問", 4: "第16問\n第17問"})
+
+    resolution = resolve_question_for_done_page(
+        pdf,
+        5,
+        ocr_engine=engine,
+        temp_dir=tmp_path / "tmp",
+        max_backtrack=5,
+    )
+
+    assert resolution.resolved is False
+    assert resolution.question is None
+    assert resolution.scanned_pages == [5, 4]

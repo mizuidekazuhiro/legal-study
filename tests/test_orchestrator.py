@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pymupdf
+import pytest
 
 from legal_study.automation.orchestrator import process_pdf_update, recover_watch_startup
 from legal_study.automation.queue import AutomationStateStore, WorkStatus
@@ -300,3 +301,130 @@ def test_persistent_old_done_stamp_does_not_retrigger_when_new_done_is_added(
     assert 5 in result.candidate_pages
     assert result.detected_done_pages == [5]
     assert [item.question for item in result.questions] == ["20"]
+
+
+class SequenceHeaderOcr:
+    name = "fake-sequence-header"
+
+    def __init__(self, overrides: dict[int, str] | None = None) -> None:
+        self.overrides = overrides or {}
+
+    def recognize(self, image_path: Path) -> OcrResult:
+        page_number = int(image_path.name.split("-p", 1)[1].split("-", 1)[0])
+        question_number = 12 + (page_number - 1) // 2
+        text = f"第{question_number}問" if page_number % 2 else "ordinary page"
+        text = self.overrides.get(page_number, text)
+        return OcrResult(
+            engine=self.name,
+            text=text,
+            confidence=0.99,
+            lines=[OcrLine(text=text, confidence=0.99)],
+        )
+
+
+def _write_sequence_pdf(path: Path, *, done_questions: set[int]) -> None:
+    document = pymupdf.open()
+    for question in range(12, 17):
+        for part in ("start", "done"):
+            page = document.new_page(width=400, height=550)
+            page.insert_text((40, 80), f"question {question} {part}")
+            if part == "done" and question in done_questions:
+                page.insert_image(
+                    pymupdf.Rect(250, 470, 370, 514),
+                    stream=done_stamp_png_bytes(),
+                )
+    document.save(path)
+    document.close()
+
+
+@pytest.mark.parametrize(
+    ("previous_done", "current_done", "new_questions"),
+    [
+        ({12}, {12, 13}, [13]),
+        ({14}, {14, 16}, [16]),
+        (set(), {13, 14, 16}, [13, 14, 16]),
+    ],
+)
+def test_only_new_individual_done_questions_are_queued_with_exact_pages(
+    tmp_path: Path,
+    previous_done: set[int],
+    current_done: set[int],
+    new_questions: list[int],
+) -> None:
+    source = tmp_path / "source.pdf"
+    settings = LocalSettings(home=tmp_path / "home")
+    _write_sequence_pdf(source, done_questions=previous_done)
+    previous_snapshot = snapshot_source(source, settings=settings)
+    previous_index = ensure_source_page_index(previous_snapshot, settings.cache_dir)
+
+    _write_sequence_pdf(source, done_questions=current_done)
+    current_index, result = process_pdf_update(
+        source,
+        subject="criminal",
+        ocr_engine=SequenceHeaderOcr(),
+        previous_index=previous_index,
+        settings=settings,
+        interval_seconds=0,
+        required_equal_observations=2,
+        timeout_seconds=1,
+    )
+
+    expected_done_pages = [2 * (question - 11) for question in new_questions]
+    assert result.detected_done_pages == expected_done_pages
+    assert [int(item.question) for item in result.questions] == new_questions
+    queue = AutomationStateStore(settings.state_db)
+    pending = queue.list_pending()
+    assert [int(item.question) for item in pending] == new_questions
+    state = QuestionStateStore(settings.state_db)
+    assert state.get("criminal", "15") is None
+    for item in pending:
+        assert state.get("criminal", item.question).status == QuestionStatus.SYNC_STABLE
+        done_page = 2 * (int(item.question) - 11)
+        expected_ids = [
+            current_index.pages[page_number - 1].stable_page_id
+            for page_number in range(done_page - 1, done_page + 1)
+        ]
+        assert item.stable_page_ids == expected_ids
+
+    if new_questions == [13, 14, 16]:
+        _same_index, repeated = process_pdf_update(
+            source,
+            subject="criminal",
+            ocr_engine=SequenceHeaderOcr(),
+            previous_index=current_index,
+            settings=settings,
+            interval_seconds=0,
+            required_equal_observations=2,
+            timeout_seconds=1,
+        )
+        assert repeated.candidate_pages == []
+        assert [int(item.question) for item in queue.list_pending()] == new_questions
+
+
+@pytest.mark.parametrize("bad_header", ["ordinary page", "第I6問"])
+def test_unresolved_done_never_creates_state_or_queue(
+    tmp_path: Path, bad_header: str
+) -> None:
+    source = tmp_path / "source.pdf"
+    settings = LocalSettings(home=tmp_path / "home")
+    _write_sequence_pdf(source, done_questions=set())
+    previous_snapshot = snapshot_source(source, settings=settings)
+    previous_index = ensure_source_page_index(previous_snapshot, settings.cache_dir)
+    _write_sequence_pdf(source, done_questions={16})
+
+    _current_index, result = process_pdf_update(
+        source,
+        subject="criminal",
+        ocr_engine=SequenceHeaderOcr({9: bad_header, 7: "ordinary page"}),
+        previous_index=previous_index,
+        settings=settings,
+        interval_seconds=0,
+        required_equal_observations=2,
+        timeout_seconds=1,
+        max_backtrack=2,
+    )
+
+    assert result.detected_done_pages == [10]
+    assert result.questions == []
+    assert AutomationStateStore(settings.state_db).list_pending() == []
+    assert QuestionStateStore(settings.state_db).get("criminal", "16") is None

@@ -16,6 +16,7 @@ from legal_study.source_store import SourceSnapshot, snapshot_source
 from legal_study.state import QuestionStateStore, QuestionStatus
 
 _QUESTION_HEADER = re.compile(r"第\s*([0-9]{1,3})\s*問")
+_HEADER_LIKE = re.compile(r"第\s*[^\s問]{0,8}\s*問")
 
 
 class QuestionResolution(BaseModel):
@@ -44,7 +45,7 @@ def _normalize_header_text(text: str) -> str:
 
 
 def _extract_question_number(text: str) -> str | None:
-    match = _QUESTION_HEADER.search(_normalize_header_text(text))
+    match = _QUESTION_HEADER.fullmatch(_normalize_header_text(text))
     return match.group(1) if match else None
 
 
@@ -106,7 +107,20 @@ def resolve_question_for_done_page(
             finally:
                 crop.unlink(missing_ok=True)
 
-            question = _extract_question_number(ocr.text)
+            header_candidates = _HEADER_LIKE.findall(_normalize_header_text(ocr.text))
+            if not header_candidates:
+                continue
+            questions = [_extract_question_number(text) for text in header_candidates]
+            if None in questions or len(set(questions)) != 1:
+                return QuestionResolution(
+                    done_page=done_page,
+                    resolved=False,
+                    scanned_pages=scanned_pages,
+                    header_text=ocr.text,
+                    header_confidence=ocr.confidence,
+                    reason="Ambiguous or malformed question heading; state was not changed.",
+                )
+            question = questions[0]
             if question is not None:
                 return QuestionResolution(
                     done_page=done_page,
