@@ -6,8 +6,11 @@ import pytest
 
 from legal_study.openai_poc import (
     OpenAIPocConfig,
+    build_study_draft_bundle_from_run,
     run_openai_study_draft_poc,
 )
+from legal_study.settings import LocalSettings
+from legal_study.state import QuestionStateStore
 from legal_study.study_draft import DraftSource
 from legal_study.study_draft_request import (
     build_study_draft_request_bundle,
@@ -377,3 +380,65 @@ def test_network_exception_records_failed_receipt(tmp_path: Path) -> None:
     assert receipt["accepted"] is False
     assert receipt["reason"] == "API_CALL_FAILED"
     assert "network exploded" in receipt["error"]
+
+
+def test_bundle_can_be_reconstructed_from_run_manifest_and_question_state(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "run"
+    instruction_dir = tmp_path / "instructions"
+    run_dir.mkdir()
+    _write_inputs(run_dir, instruction_dir)
+
+    home = tmp_path / "home"
+    settings = LocalSettings(home=home)
+    settings.ensure()
+    QuestionStateStore(settings.state_db).ensure_in_progress(
+        "criminal",
+        "22",
+        latest_source_sha256="a" * 64,
+        stable_page_ids=["stable-110"],
+    )
+
+    manifest = {
+        "schema_version": "1",
+        "run_id": "run-22",
+        "input_hash": "b" * 64,
+        "created_at": "2026-09-23T00:00:00+00:00",
+        "updated_at": "2026-09-23T00:00:00+00:00",
+        "subject": "criminal",
+        "question": "22",
+        "requested_pages": [110],
+        "source": {
+            "original_path": "C:/study/論文マスター_刑法.pdf",
+            "original_filename": "論文マスター_刑法.pdf",
+            "source_size": 123,
+            "source_mtime_ns": 456,
+            "sha256": "a" * 64,
+            "snapshot_path": str(home / "sources/sha256/source.pdf"),
+            "snapshot_created_at": "2026-09-23T00:00:00+00:00",
+        },
+        "output_dir": ".",
+        "page_count": 200,
+        "pipeline_config": {},
+        "app_version": "0.1.0",
+        "python_version": "3.12.0",
+        "platform": "test",
+        "pymupdf_version": "1.28.2",
+    }
+    (run_dir / "run_manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    bundle = build_study_draft_bundle_from_run(
+        run_dir=run_dir,
+        instruction_dir=instruction_dir,
+        settings=settings,
+    )
+
+    assert bundle.subject == "criminal"
+    assert bundle.question == "22"
+    assert bundle.source.stable_page_ids == ["stable-110"]
+    assert bundle.source.source_sha256 == "a" * 64
+    assert bundle.source.handoff_path == "criminal_22_handoff.md"
