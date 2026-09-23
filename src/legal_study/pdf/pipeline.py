@@ -26,7 +26,11 @@ from legal_study.pdf.ocr.base import (
     OcrResult,
 )
 from legal_study.pdf.ocr.cache import SharedOcrCache
-from legal_study.pdf.ocr.routing import OcrRoutingConfig, routed_image_regions
+from legal_study.pdf.ocr.routing import (
+    OcrRoutingConfig,
+    routed_image_regions,
+    routed_suspect_native_regions,
+)
 from legal_study.pdf.vector_marks import cluster_red_vector_evidence
 from legal_study.problem_packet import (
     handoff_markdown_filename,
@@ -41,7 +45,7 @@ from legal_study.state import RunStateMissingError, RunStateStore
 
 _STEP_VERSION = "2"
 _PAGE_IDENTITY_STEP_VERSION = "1"
-_OCR_STEP_VERSION = "4"
+_OCR_STEP_VERSION = "5"
 _OCR_CHECKPOINT_SCHEMA_VERSION = 1
 _RECONCILIATION_STEP_VERSION = "3"
 _REPAIR_STEP_VERSION = "2"
@@ -72,7 +76,7 @@ class PdfIngestPipeline:
 
     def input_config(self) -> dict[str, object]:
         return {
-            "pipeline_version": "3",
+            "pipeline_version": "4",
             "min_native_chars": self.inspector.min_native_chars,
             "min_native_quality": self.inspector.min_native_quality,
             "render_dpi": self.inspector.render_dpi,
@@ -1349,7 +1353,10 @@ class PdfIngestPipeline:
             for inspected_page in inspection.pages:
                 page = document[inspected_page.page_number - 1]
                 items: list[dict[str, object]] = []
-                for index, region in enumerate(inspected_page.suspect_native_regions, start=1):
+                for index, region in enumerate(
+                    routed_suspect_native_regions(inspected_page, self.routing_config),
+                    start=1,
+                ):
                     padding = self.routing_config.surgical_padding_points
                     dpi = self.routing_config.surgical_dpi
                     clip = self._clip_box(page.rect, region.bbox, padding=padding)

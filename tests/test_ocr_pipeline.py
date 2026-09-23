@@ -5,7 +5,16 @@ import pymupdf
 import pytest
 
 from legal_study.io_utils import file_sha256
-from legal_study.models import BBox, DocumentInspection, PageInspection, PageMode, SuspectRegion
+from legal_study.models import (
+    BBox,
+    DocumentInspection,
+    PageInspection,
+    PageMode,
+    RawImageRegion,
+    SuspectRegion,
+    TextLayerOrigin,
+    TextLayerTrust,
+)
 from legal_study.pdf.ocr.base import OcrBackendMetadata, OcrLine, OcrResult
 from legal_study.pdf.pipeline import PdfIngestPipeline
 from legal_study.run_manifest import prepare_run
@@ -169,6 +178,65 @@ def test_surgical_crop_defaults_to_450_dpi_and_records_transform(tmp_path: Path)
     transform = target["coordinate_transform"]
     assert transform["image_width_px"] > 0
     assert transform["image_height_px"] > 0
+
+
+
+def test_scan_like_render_targets_skip_binder_hole_noise_and_background(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "scan-like.pdf"
+    document = pymupdf.open()
+    document.new_page(width=200, height=200)
+    document.save(source)
+    document.close()
+    inspection = DocumentInspection(
+        source_path=source,
+        sha256="0" * 64,
+        page_count=1,
+        pages=[
+            PageInspection(
+                page_number=1,
+                width=200,
+                height=200,
+                native_text="\x01" * 20,
+                native_char_count=20,
+                native_quality_score=0.1,
+                text_layer_trust=TextLayerTrust.LOW,
+                text_layer_origin=TextLayerOrigin.SCAN_LIKE,
+                suspect_native_regions=[
+                    SuspectRegion(
+                        text="\x01",
+                        bbox=BBox(x0=2, y0=80, x1=12, y1=90),
+                        reason="suspicious_glyphs=1",
+                    )
+                ],
+                image_coverage=1.0,
+                largest_image_coverage=1.0,
+                drawing_count=0,
+                annotation_count=0,
+                mode=PageMode.OCR_REQUIRED,
+                ocr_recommended=True,
+                vision_review_recommended=True,
+                raw_image_regions=[
+                    RawImageRegion(
+                        image_index=0,
+                        bbox=BBox(x0=0, y0=0, x1=200, y1=200),
+                        raw={"width": 1600, "height": 1600},
+                    )
+                ],
+            )
+        ],
+    )
+    output = tmp_path / "run"
+
+    targets = PdfIngestPipeline()._render_ocr_targets(
+        source,
+        inspection,
+        output / "ocr_crops",
+        artifact_root=output,
+    )
+
+    assert targets == {}
 
 
 def _three_ocr_page_pdf(path: Path) -> None:
