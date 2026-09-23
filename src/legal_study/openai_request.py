@@ -12,6 +12,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from legal_study.study_draft_request import StudyDraftRequestBundle
 
 
+HOST_SOURCE_SNAPSHOT_PATH_SENTINEL = "__HOST_SOURCE_SNAPSHOT_PATH__"
+
+
 class StrictRequestModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -168,7 +171,7 @@ def _bind_immutable_bundle_values(
 
     exact_values = {
         "source_sha256": bundle.source.source_sha256,
-        "source_snapshot_path": bundle.source.source_snapshot_path,
+        "source_snapshot_path": HOST_SOURCE_SNAPSHOT_PATH_SENTINEL,
         "run_id": bundle.source.run_id,
         "handoff_path": bundle.source.handoff_path,
         "canonical_source_path": bundle.source.canonical_source_path,
@@ -244,7 +247,12 @@ def _render_user_input(bundle: StudyDraftRequestBundle) -> str:
         f"- subject: {bundle.subject}",
         f"- question: {bundle.question}",
         f"- source_sha256: {source.source_sha256}",
-        f"- source_snapshot_path: {source.source_snapshot_path}",
+        (
+            "- source_snapshot_path: host-controlled; return exactly "
+            f"{HOST_SOURCE_SNAPSHOT_PATH_SENTINEL}. The host will inject the real "
+            "snapshot path after generation. Do not report this sentinel as an "
+            "uncertainty or blocking issue."
+        ),
         f"- stable_page_ids: {json.dumps(source.stable_page_ids, ensure_ascii=False)}",
         f"- requested_pages: {json.dumps(source.requested_pages)}",
         f"- run_id: {source.run_id}",
