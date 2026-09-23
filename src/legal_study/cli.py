@@ -18,6 +18,11 @@ from legal_study.completion.done_marker import detect_done_markers, save_done_st
 from legal_study.completion.question_resolution import apply_done_markers
 from legal_study.finalize import finalize_existing_run
 from legal_study.io_utils import atomic_write_text
+from legal_study.openai_poc import (
+    OpenAIPocConfig,
+    build_study_draft_bundle_from_run,
+    run_openai_study_draft_poc,
+)
 from legal_study.page_identity import (
     align_page_indexes,
     ensure_source_page_index,
@@ -228,6 +233,75 @@ def process_queue(
         return
     for result in drain_pending_work(pipeline=pipeline, settings=settings):
         console.print(result.model_dump_json())
+
+
+@app.command("generate-study-draft-poc")
+def generate_study_draft_poc(
+    run_dir: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=False, readable=True),
+    ],
+    instruction_dir: Annotated[
+        Path,
+        typer.Option(
+            "--instruction-dir",
+            exists=True,
+            file_okay=False,
+            readable=True,
+            help="Directory containing the governing project instruction Markdown files.",
+        ),
+    ],
+    model: Annotated[
+        str,
+        typer.Option(help="OpenAI model ID for the one-question PoC."),
+    ] = "gpt-5.6",
+    reasoning_effort: Annotated[
+        str,
+        typer.Option(help="none|low|medium|high|xhigh|max"),
+    ] = "high",
+    reasoning_mode: Annotated[
+        str,
+        typer.Option(help="standard|pro"),
+    ] = "standard",
+    image_detail: Annotated[
+        str,
+        typer.Option(help="low|high|original|auto"),
+    ] = "original",
+    max_output_tokens: Annotated[
+        int,
+        typer.Option(help="Maximum model output tokens for the structured draft."),
+    ] = 64000,
+) -> None:
+    """Call OpenAI once for one ingest run and validate the returned study draft.
+
+    Requires the optional API dependency and OPENAI_API_KEY. This command does
+    not update queue/question state, Anki, Obsidian Inbox, or Notion.
+    """
+
+    try:
+        config = OpenAIPocConfig(
+            model=model,
+            reasoning_effort=reasoning_effort,
+            reasoning_mode=reasoning_mode,
+            image_detail=image_detail,
+            max_output_tokens=max_output_tokens,
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    settings = LocalSettings()
+    settings.ensure()
+    bundle = build_study_draft_bundle_from_run(
+        run_dir=run_dir,
+        instruction_dir=instruction_dir,
+        settings=settings,
+    )
+    result = run_openai_study_draft_poc(
+        bundle=bundle,
+        run_dir=run_dir,
+        config=config,
+    )
+    console.print(result.model_dump_json(indent=2))
 
 
 @app.command("watch-file")
