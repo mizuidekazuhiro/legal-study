@@ -6,6 +6,7 @@ import mimetypes
 from pathlib import Path
 from typing import Any, Literal
 
+import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
 from legal_study.study_draft import DraftSource, study_draft_json_schema
@@ -109,6 +110,7 @@ def build_study_draft_request_bundle(
         path=source.handoff_path,
         absolute_path=handoff_path,
     )
+    handoff_frontmatter = _read_yaml_frontmatter(handoff.text, handoff.name)
 
     instruction_names = required_instruction_names(
         subject,
@@ -129,11 +131,16 @@ def build_study_draft_request_bundle(
 
     canonical_path = _resolve_inside(root, source.canonical_source_path)
     canonical = _read_json_object(canonical_path)
+    validation_path = _resolve_inside(root, source.problem_validation_path)
+    problem_validation = _read_json_object(validation_path)
+    if problem_validation.get("valid") is not True:
+        raise ValueError("problem_validation.json is not valid=true")
     _validate_bundle_source_identity(
         subject=subject,
         question=question,
         source=source,
         canonical=canonical,
+        handoff_frontmatter=handoff_frontmatter,
     )
 
     sheets = canonical.get("handoff_review_sheets", {})
@@ -249,6 +256,7 @@ def _validate_bundle_source_identity(
     question: str,
     source: DraftSource,
     canonical: dict[str, Any],
+    handoff_frontmatter: dict[str, Any],
 ) -> None:
     canonical_source = canonical.get("source")
     if not isinstance(canonical_source, dict):
@@ -268,8 +276,40 @@ def _validate_bundle_source_identity(
         for key, (actual, expected) in comparisons.items()
         if actual != expected
     ]
+    handoff_comparisons = {
+        "subject": (handoff_frontmatter.get("subject"), subject),
+        "question": (handoff_frontmatter.get("question"), question),
+        "source_sha256": (
+            handoff_frontmatter.get("source_sha256"),
+            source.source_sha256,
+        ),
+        "source_pages": (
+            handoff_frontmatter.get("source_pages"),
+            source.requested_pages,
+        ),
+    }
+    mismatches.extend(
+        f"handoff {key}: handoff={actual!r}, bundle={expected!r}"
+        for key, (actual, expected) in handoff_comparisons.items()
+        if actual != expected
+    )
     if mismatches:
         raise ValueError("Bundle source identity mismatch: " + "; ".join(mismatches))
+
+
+def _read_yaml_frontmatter(text: str, name: str) -> dict[str, Any]:
+    if not text.startswith("---\n"):
+        raise ValueError(f"Handoff has no YAML frontmatter: {name}")
+    end = text.find("\n---\n", 4)
+    if end < 0:
+        raise ValueError(f"Handoff YAML frontmatter is not terminated: {name}")
+    try:
+        payload = yaml.safe_load(text[4:end]) or {}
+    except yaml.YAMLError as exc:
+        raise ValueError(f"Invalid handoff YAML frontmatter: {name}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"Handoff YAML frontmatter must be an object: {name}")
+    return payload
 
 
 def _sha256_file(path: Path) -> str:
