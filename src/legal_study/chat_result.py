@@ -6,6 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from legal_study.io_utils import atomic_write_json, atomic_write_text, file_sha256
 from legal_study.run_manifest import RunManifest
 
 
@@ -77,6 +78,19 @@ class ChatResultValidationReport(StrictChatResultModel):
     problem_card_count: int
     common_rule_card_count: int
     reviewed_pages: list[int]
+
+
+class ChatApplyReport(StrictChatResultModel):
+    valid: bool
+    expanded_result_path: str
+    expanded_result_sha256: str
+    obsidian_candidate_path: str
+    obsidian_candidate_sha256: str
+    inbox_path: str | None = None
+    inbox_status: Literal["not_requested", "created", "updated", "identical"] = (
+        "not_requested"
+    )
+    notion_mutated: Literal[False] = False
 
 
 def validate_chat_result(
@@ -195,3 +209,89 @@ def dump_expanded_result(result: ChatStudyResult) -> str:
     payload["anki_cards"] = expanded_anki_cards(result)
     payload.pop("problem_card_extra", None)
     return json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+
+
+def apply_chat_result(
+    *,
+    result_path: Path,
+    run_dir: Path,
+    obsidian_inbox: Path | None = None,
+    update_existing: bool = False,
+) -> ChatApplyReport:
+    """Materialize a validated Chat result locally without touching Notion.
+
+    The expanded JSON and an Obsidian candidate are always written inside the run.
+    Inbox writing is opt-in and refuses a differing existing file unless the caller
+    explicitly enables update_existing.
+    """
+
+    root = run_dir.expanduser().resolve()
+    report = validate_chat_result(result_path=result_path, run_dir=root)
+    if not report.valid:
+        raise RuntimeError(
+            "Chat result validation failed: " + ", ".join(report.issues)
+        )
+
+    result = load_chat_result(result_path)
+
+    expanded_path = root / "chat_result_expanded.json"
+    expanded_payload = result.model_dump(mode="json")
+    expanded_payload["anki_cards"] = expanded_anki_cards(result)
+    expanded_payload.pop("problem_card_extra", None)
+    atomic_write_json(expanded_path, expanded_payload)
+
+    candidate_path = root / "chat_result_obsidian.md"
+    atomic_write_text(candidate_path, result.obsidian_note.markdown)
+    candidate_text = candidate_path.read_text(encoding="utf-8")
+    if candidate_text != result.obsidian_note.markdown:
+        raise RuntimeError("Obsidian candidate post-write verification failed")
+
+    inbox_path: str | None = None
+    inbox_status: Literal["not_requested", "created", "updated", "identical"] = (
+        "not_requested"
+    )
+
+    if obsidian_inbox is not None:
+        inbox_root = obsidian_inbox.expanduser().resolve()
+        if not inbox_root.is_dir():
+            raise FileNotFoundError(
+                f"Obsidian_Inbox root does not exist: {inbox_root}"
+            )
+        destination = inbox_root / result.obsidian_note.relative_path
+        destination = destination.resolve()
+        try:
+            destination.relative_to(inbox_root)
+        except ValueError as exc:
+            raise ValueError("Obsidian destination escapes Inbox root") from exc
+
+        if destination.exists():
+            existing = destination.read_text(encoding="utf-8")
+            if existing == result.obsidian_note.markdown:
+                inbox_status = "identical"
+            elif not update_existing:
+                raise FileExistsError(
+                    "A differing Obsidian file already exists. "
+                    "Re-run with --update-existing only after confirming it is "
+                    f"the intended current file: {destination}"
+                )
+            else:
+                atomic_write_text(destination, result.obsidian_note.markdown)
+                inbox_status = "updated"
+        else:
+            atomic_write_text(destination, result.obsidian_note.markdown)
+            inbox_status = "created"
+
+        if destination.read_text(encoding="utf-8") != result.obsidian_note.markdown:
+            raise RuntimeError("Obsidian Inbox post-write verification failed")
+        inbox_path = str(destination)
+
+    return ChatApplyReport(
+        valid=True,
+        expanded_result_path=str(expanded_path),
+        expanded_result_sha256=file_sha256(expanded_path),
+        obsidian_candidate_path=str(candidate_path),
+        obsidian_candidate_sha256=file_sha256(candidate_path),
+        inbox_path=inbox_path,
+        inbox_status=inbox_status,
+        notion_mutated=False,
+    )
