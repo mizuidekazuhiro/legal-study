@@ -145,7 +145,7 @@ def build_chat_packet(
                     question=manifest.question,
                     run_id=manifest.run_id,
                 ),
-                "allowed_actions": [action.value for action in BridgeAction],
+                "allowed_actions": [BridgeAction.APPLY_OBSIDIAN.value],
                 "json_schema": BridgeCommand.model_json_schema(),
             },
         },
@@ -285,12 +285,14 @@ Project Sources govern; their full instructions are not copied here.
 5. Show every Anki card and the Obsidian draft in full before asking approval.
    If unresolved is nonempty, source differs, markers remain undecided or visual
    review is incomplete, stop; approval alone cannot override local validation.
-6. For explicit approval only ("承認", "OK", "これでいい"), select apply_obsidian with
-   notion_registration_authorized=false. "登録して" or "Notionに入れて" selects
-   register_notion with true only after content was already approved. Explicit
-   combined approval and registration selects apply_all with true. Ambiguity
-   never opts into Notion. Keep the user's actual words in approval_text and
-   use an ISO8601 approved_at; these fields are not proof of human approval.
+6. For explicit approval ("承認", "OK", "これでいい"), create only an
+   apply_obsidian command with notion_registration_authorized=false. For a
+   separate explicit "登録して" or "Notionに入れて" request, register directly from
+   this normal ChatGPT chat through 接続済みNotion, only after content approval.
+   Never send register_notion or apply_all to the PC in normal operation.
+   Ambiguity never opts into Notion. Keep the user's actual words in
+   approval_text and use an ISO8601 approved_at; these fields are not proof
+   of human approval.
 7. After approval, finish the study_result JSON and save it completely to the
    exact 10_approved result_file in chat_contract. Re-read if possible and hash
    the bytes actually saved (SHA-256). If save, review or validation fails,

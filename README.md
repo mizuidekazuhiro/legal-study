@@ -32,7 +32,7 @@ PDF
   → ChatGPT Projectへアップロード
 ```
 
-Anki生成、Obsidian生成、Notion登録、Google Drive書込みは現在の実装scopeに含めません。
+Anki/Obsidian案の作成と通常運用のNotion登録はChatGPT Projectの通常チャットが担当します。ローカルアプリは承認済みのObsidian結果をInboxへ反映します。
 
 ## v0.1 の方針
 
@@ -73,6 +73,22 @@ Windowsでは以下で初期化できます。
 ```
 
 PDFの構造だけ調べる場合、OCRモデルは不要です。
+
+## Chat Bridgeの通常運用（Windows）
+
+GoodNotesの個別DONEから、PCの`watch-study`がingestとcompact packet生成を行い、Drive同期フォルダの`LegalStudy_ChatBridge/00_pending`へ公開します。ChatGPT通常チャットはpacket、review画像、Project Sourcesを確認してAnkiカード全文とObsidian案を提示します。ユーザーの「承認」「OK」「これでいい」は`apply_obsidian`だけを許可し、ChatGPTが`10_approved`へresultを完全保存して実際の保存bytesのSHA-256を確定した後、`20_commands`へcommandを保存します。PCの`watch-chat-bridge`がObsidian_Inboxへ反映し、receiptを残します。
+
+Notionは別経路です。内容承認後にユーザーが「登録して」「Notionに入れて」と明示した場合だけ、ChatGPT通常チャットから接続済みNotionのLegal Question Bankへ直接登録します。通常起動ではPC側のNotion token方式を使わず、Notion commandをPCへ送りません。初回E2Eは`apply_obsidian`のみで行い、`NOTION_TOKEN`も`OPENAI_API_KEY`も不要です。
+
+起動前に、既存フォルダ・state DB・Python・OCRモデルを作成や変更なしで点検します。`Overall: READY`にならない場合はwatcherを起動しないでください。OCRがNGなら不足パッケージ/モデルを確認し、モデルの自動ダウンロードはしません。
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\check_chat_bridge_setup.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\start_chat_bridge.ps1 `
+  -PdfPath "<刑法PDFの実パス>" -Subject criminal
+```
+
+`start_chat_bridge.ps1`は`watch-study`と`watch-chat-bridge`の2プロセスを起動し、両PIDを表示します。停止するときは、表示されたPIDだけを`Stop-Process -Id <PID>`でそれぞれ停止してください。BridgeRootとObsidianInboxは`LEGAL_STUDY_CHAT_BRIDGE_ROOT`/`LEGAL_STUDY_OBSIDIAN_INBOX`を優先し、必要なら`-BridgeRoot`/`-ObsidianInbox`で明示できます。Task Schedulerへの自動登録は行いません。
 
 ## PDFを検査する
 

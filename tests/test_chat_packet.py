@@ -176,9 +176,7 @@ def test_build_chat_packet_is_compact_and_project_instruction_free(tmp_path: Pat
         assert contract["result"]["json_schema"] == ChatStudyResult.model_json_schema()
         assert contract["command"]["json_schema"] == BridgeCommand.model_json_schema()
         assert contract["command"]["folder"] == "20_commands"
-        assert contract["command"]["allowed_actions"] == [
-            "apply_obsidian", "register_notion", "apply_all"
-        ]
+        assert contract["command"]["allowed_actions"] == ["apply_obsidian"]
         assert contract["command"]["filename_template"].format(
             result_sha256="c" * 64, action="apply_obsidian"
         ) == command_filename(
@@ -192,6 +190,8 @@ def test_build_chat_packet_is_compact_and_project_instruction_free(tmp_path: Pat
         assert "openai" not in json.dumps(contract).lower()
         instructions = archive.read("CHAT_INSTRUCTIONS.md").decode("utf-8")
         assert "Notion" in instructions and "explicit" in instructions
+        assert "接続済みNotion" in instructions
+        assert "Never send register_notion or apply_all to the PC" in instructions
         assert instructions.index("10_approved") < instructions.index("20_commands")
         assert "result_sha256" in instructions
         assert "exactly one" in instructions

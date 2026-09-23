@@ -615,7 +615,6 @@ def doctor(
 ) -> None:
     """Check whether the core local-only PDF pipeline can run."""
     settings = LocalSettings()
-    settings.ensure()
     checks = {
         "Python": platform.python_version(),
         "Platform": platform.platform(),
