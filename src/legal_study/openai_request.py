@@ -383,9 +383,11 @@ def _render_user_input(bundle: StudyDraftRequestBundle) -> str:
                 lines.extend(
                     [
                         f"===== BEGIN NOTION STATUTE {statute.record_id} =====",
+                        f"title: {statute.title}",
                         f"law_name: {statute.law_name}",
                         f"article: {statute.article}",
                         f"notion_url: {statute.notion_url}",
+                        f"official_url: {statute.official_url}",
                         f"last_edited_time: {statute.last_edited_time}",
                         "",
                         statute.text.rstrip(),
