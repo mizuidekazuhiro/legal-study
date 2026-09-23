@@ -6,13 +6,13 @@ from legal_study.automation.queue import AutomationStateStore, WorkStatus
 def test_queue_is_idempotent_for_same_question_and_source(tmp_path: Path) -> None:
     store = AutomationStateStore(tmp_path / "state.sqlite3")
 
-    first = store.enqueue(
+    store.enqueue(
         subject="criminal",
         question="22",
         source_sha256="sha-a",
         stable_page_ids=["p1", "p2"],
     )
-    second = store.enqueue(
+    store.enqueue(
         subject="criminal",
         question="22",
         source_sha256="sha-a",
