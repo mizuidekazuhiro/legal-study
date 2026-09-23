@@ -158,6 +158,9 @@ def test_request_template_matches_responses_multimodal_shape(tmp_path: Path) -> 
     assert 'exact_text="講師答案本文"' in content[0]["text"]
     assert "review_status=NEEDS_REVIEW" in content[0]["text"]
     assert "not, by itself, a reason to leave the final draft unresolved" in content[0]["text"]
+    assert "EvidenceRef.review_required and DraftText.review_required" in content[0]["text"]
+    assert "It does NOT by itself require DraftText.review_required=true" in content[0]["text"]
+    assert "Do not propagate the evidence provenance flag mechanically" in content[0]["text"]
 
     image = content[1]
     assert image["type"] == "input_image"
