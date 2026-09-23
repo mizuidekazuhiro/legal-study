@@ -197,6 +197,7 @@ def process_pdf_update(
                     question=question,
                     source_sha256=stable.sha256,
                     stable_page_ids=record.stable_page_ids,
+                    source_snapshot=snapshot,
                 )
                 queue_item_id = queued.id
                 queue_status = queued.status
