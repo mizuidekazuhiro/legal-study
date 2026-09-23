@@ -1,5 +1,3 @@
-import pytest
-
 from legal_study.obsidian_retrieval import search_obsidian_argument_patterns
 
 
@@ -88,9 +86,13 @@ def test_conflicting_duplicate_pattern_id_is_rejected(tmp_path) -> None:
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="Conflicting duplicate Obsidian pattern_id"):
+    try:
         search_obsidian_argument_patterns(
             vault_dir=vault,
             queries=["間接正犯"],
             subject="刑法",
         )
+    except ValueError as exc:
+        assert "Conflicting duplicate Obsidian pattern_id" in str(exc)
+    else:
+        raise AssertionError("Expected conflicting duplicate pattern_id to be rejected")
