@@ -185,10 +185,7 @@ def _normalize_article(article: str) -> str:
 
 
 def _normalize_data_source_id(value: str) -> str:
-    cleaned = value.strip()
-    prefix = "collection://"
-    if cleaned.startswith(prefix):
-        cleaned = cleaned[len(prefix) :]
+    cleaned = value.strip().removeprefix("collection://")
     if not cleaned:
         raise ValueError("Notion data source id must not be empty")
     return cleaned
@@ -242,7 +239,7 @@ def _url_value(properties: dict[str, Any], name: str) -> str:
 def _property(properties: dict[str, Any], name: str) -> dict[str, Any]:
     prop = properties.get(name)
     if not isinstance(prop, dict):
-        raise ValueError(f"Notion statute property is missing: {name}")
+        raise TypeError(f"Notion statute property is missing: {name}")
     return prop
 
 
