@@ -12,11 +12,12 @@ from pydantic import BaseModel, Field
 
 from legal_study import __version__
 from legal_study.io_utils import atomic_write_json
+from legal_study.provenance import resolve_code_revision
 from legal_study.settings import LocalSettings
 from legal_study.source_store import SourceSnapshot
 from legal_study.workspace import run_dir
 
-RUN_MANIFEST_SCHEMA_VERSION = "1"
+RUN_MANIFEST_SCHEMA_VERSION = "2"
 
 
 class RunManifestMismatchError(RuntimeError):
@@ -36,6 +37,10 @@ class RunManifest(BaseModel):
     output_dir: Path
     page_count: int | None = None
     pipeline_config: dict[str, Any] = Field(default_factory=dict)
+    pipeline_config_sha256: str | None = None
+    code_revision: str | None = None
+    code_revision_source: str = "unavailable"
+    code_dirty: bool | None = None
     app_version: str
     python_version: str
     platform: str
@@ -51,6 +56,13 @@ class PreparedRun(BaseModel):
 
 def _normalized_pages(pages: list[int] | None) -> list[int] | None:
     return sorted(set(pages)) if pages is not None else None
+
+
+def calculate_pipeline_config_hash(pipeline_config: dict[str, Any]) -> str:
+    encoded = json.dumps(
+        pipeline_config, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def calculate_input_hash(
@@ -129,6 +141,7 @@ def prepare_run(
 
     now = datetime.now(UTC)
     run_id = hashlib.sha256(f"{input_hash}\0{resolved_output}".encode()).hexdigest()
+    revision = resolve_code_revision()
     manifest = RunManifest(
         run_id=run_id,
         input_hash=input_hash,
@@ -140,6 +153,10 @@ def prepare_run(
         source=snapshot,
         output_dir=Path("."),
         pipeline_config=pipeline_config,
+        pipeline_config_sha256=calculate_pipeline_config_hash(pipeline_config),
+        code_revision=revision.sha,
+        code_revision_source=revision.source,
+        code_dirty=revision.dirty,
         app_version=__version__,
         python_version=platform.python_version(),
         platform=platform.platform(),
