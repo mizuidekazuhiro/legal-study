@@ -4,7 +4,10 @@ from pathlib import Path
 
 import pytest
 
+from legal_study.chat_bridge_worker import BridgeAction, BridgeCommand
+from legal_study.chat_contract import command_filename
 from legal_study.chat_packet import build_chat_packet
+from legal_study.chat_result import ChatStudyResult
 
 
 def _run(tmp_path: Path) -> Path:
@@ -162,6 +165,40 @@ def test_build_chat_packet_is_compact_and_project_instruction_free(tmp_path: Pat
         manifest = json.loads(archive.read("packet_manifest.json"))
         assert manifest["project_instructions_included"] is False
         assert manifest["audit_artifacts_included"] is False
+        assert manifest["subject"] == "criminal"
+        assert manifest["question"] == "12"
+        assert manifest["source_sha256"] == "a" * 64
+        assert manifest["run_id"] == "r" * 64
+        assert manifest["requested_pages"] == [109]
+        contract = manifest["chat_contract"]
+        assert contract["schema_version"] == "chat_bridge_contract.v1"
+        assert contract["result"]["result_file"].startswith("10_approved/")
+        assert contract["result"]["json_schema"] == ChatStudyResult.model_json_schema()
+        assert contract["command"]["json_schema"] == BridgeCommand.model_json_schema()
+        assert contract["command"]["folder"] == "20_commands"
+        assert contract["command"]["allowed_actions"] == [
+            "apply_obsidian", "register_notion", "apply_all"
+        ]
+        assert contract["command"]["filename_template"].format(
+            result_sha256="c" * 64, action="apply_obsidian"
+        ) == command_filename(
+            subject="criminal", question="12", run_id="r" * 64,
+            result_sha256="c" * 64, action=BridgeAction.APPLY_OBSIDIAN,
+        )
+        card_schema = contract["result"]["json_schema"]["$defs"]["ChatAnkiCard"]
+        assert {"name", "scope", "learning_type", "front", "back", "extra",
+                "anki_tags", "anki_deck"} <= set(card_schema["properties"])
+        assert "api_key" not in json.dumps(contract).lower()
+        assert "openai" not in json.dumps(contract).lower()
+        instructions = archive.read("CHAT_INSTRUCTIONS.md").decode("utf-8")
+        assert "Notion" in instructions and "explicit" in instructions
+        assert instructions.index("10_approved") < instructions.index("20_commands")
+        assert "result_sha256" in instructions
+        assert "exactly one" in instructions
+        assert "unresolved" in instructions
+        assert "reviewed_pages" in instructions
+        assert "command_id" in instructions
+        assert "never overwrite" in instructions
 
 
 def test_invalid_problem_packet_is_not_exported(tmp_path: Path) -> None:

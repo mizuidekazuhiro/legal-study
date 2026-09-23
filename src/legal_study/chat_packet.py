@@ -7,6 +7,9 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from legal_study.chat_bridge_worker import BridgeAction, BridgeCommand
+from legal_study.chat_contract import command_filename_template, result_filename
+from legal_study.chat_result import ChatStudyResult
 from legal_study.io_utils import file_sha256
 from legal_study.problem_packet import handoff_markdown_filename
 from legal_study.run_manifest import RunManifest
@@ -101,6 +104,12 @@ def build_chat_packet(
             raise RuntimeError("Supplemental retrieval identity does not match run")
         supplemental_payload = _compact_supplemental(supplemental)
 
+    result_name = result_filename(
+        subject=manifest.subject,
+        question=manifest.question,
+        source_sha256=manifest.source.sha256,
+        run_id=manifest.run_id,
+    )
     packet_manifest = {
         "schema_version": "chat_packet.v1",
         "subject": manifest.subject,
@@ -114,6 +123,32 @@ def build_chat_packet(
         "supplemental_included": supplemental_payload is not None,
         "project_instructions_included": False,
         "audit_artifacts_included": False,
+        "chat_contract": {
+            "schema_version": "chat_bridge_contract.v1",
+            "selection": {
+                "match_fields": ["subject", "question"],
+                "require_unique": True,
+                "ambiguity_fields": ["source_sha256", "run_id"],
+            },
+            "result": {
+                "schema_version": "chat_study_result.v1",
+                "folder": "10_approved",
+                "filename": result_name,
+                "result_file": f"10_approved/{result_name}",
+                "json_schema": ChatStudyResult.model_json_schema(),
+            },
+            "command": {
+                "schema_version": "chat_bridge_command.v1",
+                "folder": "20_commands",
+                "filename_template": command_filename_template(
+                    subject=manifest.subject,
+                    question=manifest.question,
+                    run_id=manifest.run_id,
+                ),
+                "allowed_actions": [action.value for action in BridgeAction],
+                "json_schema": BridgeCommand.model_json_schema(),
+            },
+        },
     }
 
     target = (
@@ -230,25 +265,41 @@ def _compact_supplemental(
 def _chat_instructions() -> str:
     return """# Chat Bridge Instructions
 
-This ZIP is evidence/context for one legal-study problem.
+Use this in a normal ChatGPT Project chat, not Work mode or an API workflow.
+Project Sources govern; their full instructions are not copied here.
 
-1. Use the ChatGPT Project Sources as the governing instructions. They are not
-   duplicated in this packet.
-2. Treat review/*.png as the visual authority for handwriting, corrections,
-   marker colors/boundaries, and reading marks.
-3. Use handoff.md as the compact primary reading surface.
-4. Use marker_index.json as machine-derived marker candidates; visually confirm
-   any candidate that needs review rather than copying it blindly.
-5. For this workflow, common-rule text supplied in supplemental.json comes from
-   registered Obsidian argument patterns. Do not fetch or substitute a
-   論文ナビゲートテキスト PDF as an additional source.
-6. Statute text supplied in supplemental.json comes from Notion.
-7. Do not use color alone to infer a marker's legal role.
-8. Do not perform Notion registration unless the user explicitly asks.
-9. Present all Anki cards in full in chat before any Notion registration unless
-   the user explicitly waives confirmation.
-10. When a machine-readable bridge result is requested after user approval,
-    return the result in the chat-result schema expected by the local validator.
+1. Match pending packets by subject and question. Use exactly one matching
+   packet; if zero, stop. If multiple, inspect source_sha256, run_id and each
+   manifest; stop unless the intended packet is unambiguous. Never pick newest.
+2. handoff.md is the compact reading surface. review/*.png is visual authority
+   for handwriting, corrections and marker boundaries. Visually verify
+   marker_index.json candidates; do not infer legal meaning from color alone.
+3. If present, supplemental.json contains registered Obsidian arguments and
+   Notion statutes. Do not fetch a 論文ナビゲートテキスト PDF as another source.
+4. Follow packet_manifest.json chat_contract and the embedded result JSON schema.
+   Copy subject, question, source_sha256 and requested_pages exactly into
+   study_result.source. Set reviewed_pages only for pages actually checked in
+   review/*.png; all requested pages must be reviewed. Record unresolved issues.
+   Use the listed Anki fields, the criminal deck 刑法 論文試験, and shared
+   problem_card_extra rather than duplicating the full answer per problem card.
+5. Show every Anki card and the Obsidian draft in full before asking approval.
+   If unresolved is nonempty, source differs, markers remain undecided or visual
+   review is incomplete, stop; approval alone cannot override local validation.
+6. For explicit approval only ("承認", "OK", "これでいい"), select apply_obsidian with
+   notion_registration_authorized=false. "登録して" or "Notionに入れて" selects
+   register_notion with true only after content was already approved. Explicit
+   combined approval and registration selects apply_all with true. Ambiguity
+   never opts into Notion. Keep the user's actual words in approval_text and
+   use an ISO8601 approved_at; these fields are not proof of human approval.
+7. After approval, finish the study_result JSON and save it completely to the
+   exact 10_approved result_file in chat_contract. Re-read if possible and hash
+   the bytes actually saved (SHA-256). If save, review or validation fails,
+   write no command. Then build the command from the existing schema with no
+   extra fields, set result_sha256 to that saved-file hash, and save it last to
+   20_commands using the deterministic filename_template. Set command_id to
+   that filename without .command.json. Never reverse order. For an existing
+   result or command name, reuse only identical bytes; never overwrite a
+   different file.
 """
 
 
