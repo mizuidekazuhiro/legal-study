@@ -5,11 +5,11 @@ from pathlib import Path
 import pytest
 
 from legal_study.study_draft import DraftSource
-from legal_study.supplemental_retrieval import SupplementalRetrievalBundle
 from legal_study.study_draft_request import (
     build_study_draft_request_bundle,
     required_instruction_names,
 )
+from legal_study.supplemental_retrieval import SupplementalRetrievalBundle
 
 
 def _source() -> DraftSource:
