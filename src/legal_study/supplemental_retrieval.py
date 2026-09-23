@@ -24,6 +24,9 @@ class ObsidianArgumentPattern(StrictSupplementalModel):
     title: str = Field(min_length=1)
     body: str = Field(min_length=1)
     related_statutes: list[str] = Field(default_factory=list)
+    source: str | None = None
+    source_page: int | str | None = None
+    pdf_pages: int | str | list[int] | list[str] | None = None
     source_path: str = Field(min_length=1)
     source_sha256: str = Field(min_length=64, max_length=64)
 
