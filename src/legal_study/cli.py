@@ -10,6 +10,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from legal_study.automation.sync_stability import mark_question_sync_stable
 from legal_study.completion.done_marker import detect_done_markers, save_done_stamp
 from legal_study.completion.question_resolution import apply_done_markers
 from legal_study.finalize import finalize_existing_run
@@ -135,6 +136,41 @@ def apply_done(
             indent=2,
         )
     )
+
+
+@app.command("check-sync-stable")
+def check_sync_stable(
+    pdf: Annotated[Path, typer.Argument(exists=True, readable=True)],
+    subject: Annotated[str, typer.Option(help="Subject key, e.g. criminal")] = "criminal",
+    question: Annotated[str, typer.Option(help="Question number already in DONE_DETECTED state")] = "",
+    interval_seconds: Annotated[
+        float,
+        typer.Option(help="Seconds between stability probes."),
+    ] = 5.0,
+    required_equal_observations: Annotated[
+        int,
+        typer.Option(help="Equal size/mtime observations required before hash verification."),
+    ] = 3,
+    timeout_seconds: Annotated[
+        float,
+        typer.Option(help="Maximum seconds to wait before leaving the state unchanged."),
+    ] = 90.0,
+) -> None:
+    """Advance DONE_DETECTED to SYNC_STABLE only after source stability verification."""
+    if not question.strip():
+        raise typer.BadParameter("--question is required")
+    settings = LocalSettings()
+    settings.ensure()
+    result = mark_question_sync_stable(
+        pdf,
+        subject=subject,
+        question=question.strip(),
+        settings=settings,
+        interval_seconds=interval_seconds,
+        required_equal_observations=required_equal_observations,
+        timeout_seconds=timeout_seconds,
+    )
+    console.print(json.dumps(result.model_dump(mode="json"), ensure_ascii=False, indent=2))
 
 
 @app.command()
