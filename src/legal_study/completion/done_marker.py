@@ -5,7 +5,7 @@ import io
 from pathlib import Path
 
 import pymupdf
-from PIL import Image, ImageChops, ImageDraw, ImageOps, ImageStat
+from PIL import Image, ImageChops, ImageDraw, ImageOps, ImageStat, UnidentifiedImageError
 from pydantic import BaseModel, Field
 
 STAMP_VERSION = "LEGAL-STUDY-DONE-V1"
