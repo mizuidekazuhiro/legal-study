@@ -234,3 +234,69 @@ def test_first_watch_startup_establishes_baseline_without_historical_replay(
     assert result.reason == "INITIAL_BASELINE_ESTABLISHED"
     assert result.questions == []
     assert AutomationStateStore(settings.state_db).list_pending() == []
+
+
+
+class MultiDoneHeaderOcr:
+    name = "fake-multi-header"
+
+    def recognize(self, image_path: Path) -> OcrResult:
+        page_number = int(image_path.name.split("-p", 1)[1].split("-", 1)[0])
+        if page_number == 2:
+            text = "第12問"
+        elif page_number == 4:
+            text = "第20問"
+        else:
+            text = "ordinary page"
+        return OcrResult(
+            engine=self.name,
+            text=text,
+            confidence=0.99,
+            lines=[OcrLine(text=text, confidence=0.99)],
+        )
+
+
+def _write_multi_done_pdf(path: Path, *, done_pages: set[int]) -> None:
+    document = pymupdf.open()
+    for page_number in range(1, 7):
+        page = document.new_page(width=400, height=550)
+        page.insert_text((40, 80), f"page {page_number} ordinary content")
+        if page_number in done_pages:
+            page.insert_image(
+                pymupdf.Rect(250, 470, 370, 514),
+                stream=done_stamp_png_bytes(),
+            )
+    document.save(path)
+    document.close()
+
+
+def test_persistent_old_done_stamp_does_not_retrigger_when_new_done_is_added(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.pdf"
+    settings = LocalSettings(home=tmp_path / "home")
+
+    # Day 1: question 12 is already complete and its DONE stamp remains in the PDF.
+    _write_multi_done_pdf(source, done_pages={3})
+    baseline_snapshot = snapshot_source(source, settings=settings)
+    baseline = ensure_source_page_index(baseline_snapshot, settings.cache_dir)
+
+    # Day 2: question 20 is completed. The old question-12 stamp is intentionally
+    # left in place, so the PDF now contains both DONE stamps.
+    _write_multi_done_pdf(source, done_pages={3, 5})
+
+    _current, result = process_pdf_update(
+        source,
+        subject="criminal",
+        ocr_engine=MultiDoneHeaderOcr(),
+        previous_index=baseline,
+        settings=settings,
+        interval_seconds=0,
+        required_equal_observations=2,
+        timeout_seconds=1,
+    )
+
+    assert 3 not in result.candidate_pages
+    assert 5 in result.candidate_pages
+    assert result.detected_done_pages == [5]
+    assert [item.question for item in result.questions] == ["20"]
