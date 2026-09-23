@@ -447,12 +447,12 @@ def _iter_draft_evidence_refs(draft: StudyDraft):
         for section_index, section in enumerate(draft.obsidian_note.sections):
             for block_index, block in enumerate(section.blocks):
                 for ref_index, reference in enumerate(block.evidence_refs):
-                    yield (
+                    location = (
                         "obsidian_note.sections"
                         f"[{section_index}].blocks[{block_index}]"
-                        f".evidence_refs[{ref_index}]",
-                        reference,
+                        f".evidence_refs[{ref_index}]"
                     )
+                    yield (location, reference)
     for unresolved_index, unresolved in enumerate(draft.unresolved):
         for ref_index, reference in enumerate(unresolved.evidence_refs):
             yield (
