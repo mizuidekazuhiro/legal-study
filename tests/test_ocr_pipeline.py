@@ -238,6 +238,25 @@ def test_scan_like_render_targets_skip_binder_hole_noise_and_background(
 
     assert targets == {}
 
+    manifest_path = output / "review_manifest.json"
+    PdfIngestPipeline()._write_review_manifest(
+        inspection,
+        manifest_path,
+        review_crops={},
+        ocr_targets=targets,
+    )
+    review_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    plan = review_payload["pages"][0]["ocr_plan"]
+    assert plan["full_page_ocr"] is True
+    assert plan["suppressed_target_count"] == 2
+    assert {
+        item["reason"] for item in plan["suppressed_targets"]
+    } == {
+        "redundant_with_full_page_ocr_scan_like_text_layer",
+        "duplicate_of_full_page_ocr_background_image",
+    }
+    assert review_payload["pages"][0]["vision_review_recommended"] is True
+
 
 def _three_ocr_page_pdf(path: Path) -> None:
     document = pymupdf.open()
