@@ -1,6 +1,5 @@
 from legal_study.obsidian_retrieval import search_obsidian_argument_patterns
 
-
 _PATTERN = """---
 title: 刑3　間接正犯の実行行為性
 aliases:
