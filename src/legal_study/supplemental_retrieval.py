@@ -56,10 +56,12 @@ class ObsidianArgumentPattern(StrictSupplementalModel):
 class NotionStatuteRecord(StrictSupplementalModel):
     source_kind: Literal["notion_statute"] = "notion_statute"
     record_id: str = Field(min_length=1)
+    title: str | None = None
     law_name: str = Field(min_length=1)
     article: str = Field(min_length=1)
     text: str = Field(min_length=1)
     notion_url: str = Field(min_length=1)
+    official_url: str | None = None
     last_edited_time: str | None = None
 
 
