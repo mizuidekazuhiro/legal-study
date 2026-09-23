@@ -16,6 +16,8 @@ from legal_study.automation.sync_stability import mark_question_sync_stable
 from legal_study.automation.worker import drain_pending_work, process_next_work_item
 from legal_study.completion.done_marker import detect_done_markers, save_done_stamp
 from legal_study.completion.question_resolution import apply_done_markers
+from legal_study.chat_packet import build_chat_packet
+from legal_study.chat_result import validate_chat_result
 from legal_study.finalize import finalize_existing_run
 from legal_study.io_utils import atomic_write_text
 from legal_study.openai_poc import (
@@ -233,6 +235,59 @@ def process_queue(
         return
     for result in drain_pending_work(pipeline=pipeline, settings=settings):
         console.print(result.model_dump_json())
+
+
+@app.command("build-chat-packet")
+def build_chat_packet_command(
+    run_dir: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=False, readable=True),
+    ],
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", "-o", help="Optional output ZIP path."),
+    ] = None,
+    supplemental: Annotated[
+        Path | None,
+        typer.Option(
+            "--supplemental",
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            help="Optional supplemental_retrieval.json path. Defaults to the run directory.",
+        ),
+    ] = None,
+) -> None:
+    """Create the compact ZIP handed to the ChatGPT Project. No OpenAI API call."""
+
+    result = build_chat_packet(
+        run_dir=run_dir,
+        output_path=output,
+        supplemental_path=supplemental,
+    )
+    console.print(result.model_dump_json(indent=2))
+
+
+@app.command("validate-chat-result")
+def validate_chat_result_command(
+    result_json: Annotated[
+        Path,
+        typer.Argument(exists=True, dir_okay=False, readable=True),
+    ],
+    run_dir: Annotated[
+        Path,
+        typer.Option("--run-dir", exists=True, file_okay=False, readable=True),
+    ],
+) -> None:
+    """Validate a ChatGPT Project result against the exact local source run."""
+
+    report = validate_chat_result(
+        result_path=result_json,
+        run_dir=run_dir,
+    )
+    console.print(report.model_dump_json(indent=2))
+    if not report.valid:
+        raise typer.Exit(code=1)
 
 
 @app.command("generate-study-draft-poc")
