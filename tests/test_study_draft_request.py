@@ -35,6 +35,12 @@ def _write_inputs(run_dir: Path, instruction_dir: Path) -> None:
             "sha256": "a" * 64,
             "requested_pages": [110],
         },
+        "pages": [
+            {
+                "page_number": 110,
+                "repair_review_count": 1,
+            }
+        ],
         "handoff_review_sheets": {
             "110": "handoff_review/page-0110-review.png",
         },
@@ -104,6 +110,7 @@ def test_build_bundle_contains_exact_inputs_and_response_schema(tmp_path: Path) 
     )
     assert all(len(item.sha256) == 64 for item in bundle.instructions)
     assert len(bundle.review_sheets) == 1
+    assert bundle.primary_text_review_required_pages == [110]
     review = bundle.review_sheets[0]
     assert review.page_number == 110
     assert review.path == "handoff_review/page-0110-review.png"
