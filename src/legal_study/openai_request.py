@@ -318,6 +318,40 @@ def _render_user_input(bundle: StudyDraftRequestBundle) -> str:
             "review_required=true"
         )
 
+    if bundle.subject == "criminal":
+        lines.extend(
+            [
+                "",
+                "## Criminal-law Anki completeness contract",
+                "",
+                (
+                    "- Generate the complete Anki draft set required by the governing "
+                    "criminal-law instructions in this same response. Draft generation "
+                    "is independent of whether Notion registration/publication is in "
+                    "scope for this run."
+                ),
+                (
+                    "- Do not stop at the L4 whole-problem card. Decompose every "
+                    "independently valuable problem-specific judgment unit required by "
+                    "the governing instructions, including relevant A/C/D-type units, "
+                    "while also producing any required common-rule cards supported by "
+                    "the retrieved Obsidian argument patterns."
+                ),
+                (
+                    "- There is no fixed target, standard, or maximum card count. Use "
+                    "one independently answerable judgment unit per card. Do not omit "
+                    "otherwise-required cards merely to keep the set small."
+                ),
+                (
+                    "- Do not report card decomposition as unresolved merely because "
+                    "Notion registration, publication, or duplicate checking is outside "
+                    "this draft-generation step. Only leave a card-related uncertainty "
+                    "when the source evidence itself is insufficient to determine the "
+                    "card content safely."
+                ),
+            ]
+        )
+
     lines.extend(
         [
             "",
