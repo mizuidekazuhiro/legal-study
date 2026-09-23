@@ -145,7 +145,7 @@ def build_study_draft_request_bundle(
 
     sheets = canonical.get("handoff_review_sheets", {})
     if not isinstance(sheets, dict):
-        raise ValueError("canonical_source.json handoff_review_sheets must be an object")
+        raise TypeError("canonical_source.json handoff_review_sheets must be an object")
 
     review_sheets: list[BundleReviewImage] = []
     for page_key, relative_path in sorted(
@@ -158,7 +158,7 @@ def build_study_draft_request_bundle(
                 f"Review sheet page {page_number} is outside requested_pages"
             )
         if not isinstance(relative_path, str):
-            raise ValueError("Review sheet path must be a string")
+            raise TypeError("Review sheet path must be a string")
         image_path = _resolve_inside(root, relative_path)
         if not image_path.is_file():
             raise FileNotFoundError(f"Review sheet is missing: {relative_path}")
@@ -246,7 +246,7 @@ def _read_json_object(path: Path) -> dict[str, Any]:
     except json.JSONDecodeError as exc:
         raise ValueError(f"Invalid JSON artifact: {path.name}") from exc
     if not isinstance(payload, dict):
-        raise ValueError(f"JSON artifact must contain an object: {path.name}")
+        raise TypeError(f"JSON artifact must contain an object: {path.name}")
     return payload
 
 
@@ -260,7 +260,7 @@ def _validate_bundle_source_identity(
 ) -> None:
     canonical_source = canonical.get("source")
     if not isinstance(canonical_source, dict):
-        raise ValueError("canonical_source.json has no source object")
+        raise TypeError("canonical_source.json has no source object")
 
     comparisons = {
         "subject": (canonical.get("subject"), subject),
@@ -308,7 +308,7 @@ def _read_yaml_frontmatter(text: str, name: str) -> dict[str, Any]:
     except yaml.YAMLError as exc:
         raise ValueError(f"Invalid handoff YAML frontmatter: {name}") from exc
     if not isinstance(payload, dict):
-        raise ValueError(f"Handoff YAML frontmatter must be an object: {name}")
+        raise TypeError(f"Handoff YAML frontmatter must be an object: {name}")
     return payload
 
 
