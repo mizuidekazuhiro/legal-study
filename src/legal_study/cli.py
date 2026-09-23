@@ -43,7 +43,8 @@ from legal_study.pdf.ocr.paddle import (
 from legal_study.pdf.ocr.routing import OcrRoutingConfig
 from legal_study.pdf.pipeline import PdfIngestPipeline
 from legal_study.problem_packet import handoff_markdown_filename
-from legal_study.run_manifest import prepare_run
+from legal_study.provenance import resolve_code_revision
+from legal_study.run_manifest import calculate_pipeline_config_hash, prepare_run
 from legal_study.settings import LocalSettings
 from legal_study.source_store import snapshot_source
 
@@ -195,6 +196,8 @@ def watch_study(
         ocr_engine=engine,
         routing_config=OcrRoutingConfig(),
     )
+    pipeline_config = pipeline.input_config()
+    revision = resolve_code_revision()
     console.print(
         json.dumps(
             {
@@ -202,6 +205,13 @@ def watch_study(
                 "subject": subject,
                 "poll_interval_seconds": poll_interval_seconds,
                 "stability_interval_seconds": stability_interval_seconds,
+                "code_revision": revision.sha,
+                "code_revision_source": revision.source,
+                "code_dirty": revision.dirty,
+                "pipeline_version": pipeline_config["pipeline_version"],
+                "pipeline_config_sha256": calculate_pipeline_config_hash(
+                    pipeline_config
+                ),
             },
             ensure_ascii=False,
         )
