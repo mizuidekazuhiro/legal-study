@@ -3,6 +3,7 @@ from pathlib import Path
 
 from legal_study.chat_result import (
     ChatStudyResult,
+    apply_chat_result,
     expanded_anki_cards,
     validate_chat_result,
 )
@@ -144,3 +145,60 @@ def test_source_or_review_mismatch_is_rejected(tmp_path: Path) -> None:
     assert "SOURCE_SHA256_MISMATCH" in report.issues
     assert "VISUAL_REVIEW_INCOMPLETE" in report.issues
     assert "UNRESOLVED_ITEMS_REMAIN" in report.issues
+
+
+def test_apply_chat_result_materializes_and_writes_inbox_safely(tmp_path: Path) -> None:
+    run = _run(tmp_path)
+    payload = _payload()
+    result_file = tmp_path / "study_result.json"
+    result_file.write_text(
+        json.dumps(payload, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    inbox = tmp_path / "Obsidian_Inbox"
+    inbox.mkdir()
+
+    report = apply_chat_result(
+        result_path=result_file,
+        run_dir=run,
+        obsidian_inbox=inbox,
+    )
+
+    assert report.valid is True
+    assert report.notion_mutated is False
+    assert report.inbox_status == "created"
+    destination = inbox / "30_論文マスター/刑法/刑法_第12問.md"
+    assert destination.read_text(encoding="utf-8") == payload["obsidian_note"]["markdown"]
+
+    expanded = json.loads(
+        (run / "chat_result_expanded.json").read_text(encoding="utf-8")
+    )
+    assert expanded["anki_cards"][0]["extra"] == payload["problem_card_extra"]
+    assert "problem_card_extra" not in expanded
+
+
+def test_apply_chat_result_refuses_differing_existing_note_by_default(
+    tmp_path: Path,
+) -> None:
+    run = _run(tmp_path)
+    payload = _payload()
+    result_file = tmp_path / "study_result.json"
+    result_file.write_text(
+        json.dumps(payload, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    inbox = tmp_path / "Obsidian_Inbox"
+    destination = inbox / "30_論文マスター/刑法/刑法_第12問.md"
+    destination.parent.mkdir(parents=True)
+    destination.write_text("older different content", encoding="utf-8")
+
+    try:
+        apply_chat_result(
+            result_path=result_file,
+            run_dir=run,
+            obsidian_inbox=inbox,
+        )
+    except FileExistsError as exc:
+        assert "differing Obsidian file already exists" in str(exc)
+    else:
+        raise AssertionError("Expected differing existing note to be refused")
