@@ -1,0 +1,275 @@
+from __future__ import annotations
+
+import base64
+import copy
+import hashlib
+import json
+from pathlib import Path
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from legal_study.study_draft_request import StudyDraftRequestBundle
+
+
+class StrictRequestModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class OpenAIResponsesRequestTemplate(StrictRequestModel):
+    """OpenAI Responses API create parameters before model selection.
+
+    The payload intentionally omits `model`. P2-A4 only prepares the request
+    shape; a later step may select a model and perform the network call.
+    """
+
+    api: Literal["responses"] = "responses"
+    payload: dict[str, Any]
+    response_schema_sha256: str = Field(min_length=64, max_length=64)
+
+
+def build_openai_responses_request_template(
+    *,
+    bundle: StudyDraftRequestBundle,
+    run_dir: Path,
+    image_detail: Literal["low", "high", "original", "auto"] = "auto",
+) -> OpenAIResponsesRequestTemplate:
+    """Translate a StudyDraftRequestBundle into Responses API create params.
+
+    No OpenAI client is instantiated and no network request is made.
+    """
+
+    _validate_embedded_text_hash(bundle.handoff.text, bundle.handoff.sha256, "handoff")
+    for instruction in bundle.instructions:
+        _validate_embedded_text_hash(
+            instruction.text,
+            instruction.sha256,
+            f"instruction:{instruction.name}",
+        )
+
+    instructions = _render_instructions(bundle)
+    user_text = _render_user_input(bundle)
+    content: list[dict[str, Any]] = [
+        {
+            "type": "input_text",
+            "text": user_text,
+        }
+    ]
+
+    root = run_dir.resolve()
+    for review in bundle.review_sheets:
+        image_path = _resolve_inside(root, review.path)
+        if not image_path.is_file():
+            raise FileNotFoundError(f"Review sheet is missing: {review.path}")
+        image_bytes = image_path.read_bytes()
+        actual_sha256 = hashlib.sha256(image_bytes).hexdigest()
+        if actual_sha256 != review.sha256:
+            raise ValueError(
+                "Review sheet SHA-256 changed after bundle creation: "
+                f"{review.path}"
+            )
+        encoded = base64.b64encode(image_bytes).decode("ascii")
+        content.append(
+            {
+                "type": "input_image",
+                "image_url": f"data:{review.mime_type};base64,{encoded}",
+                "detail": image_detail,
+            }
+        )
+
+    strict_schema = make_openai_strict_schema(bundle.response_schema)
+    schema_bytes = json.dumps(
+        strict_schema,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    strict_schema_sha256 = hashlib.sha256(schema_bytes).hexdigest()
+
+    payload = {
+        "instructions": instructions,
+        "input": [
+            {
+                "role": "user",
+                "content": content,
+            }
+        ],
+        "text": {
+            "format": {
+                "type": "json_schema",
+                "name": "study_draft",
+                "strict": True,
+                "schema": strict_schema,
+            }
+        },
+    }
+
+    if "model" in payload:
+        raise AssertionError("P2-A4 request template must not select a model")
+
+    return OpenAIResponsesRequestTemplate(
+        payload=payload,
+        response_schema_sha256=strict_schema_sha256,
+    )
+
+
+def make_openai_strict_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Convert Pydantic JSON Schema to the strict Structured Outputs subset.
+
+    Structured Outputs requires every object property to be required and
+    `additionalProperties: false`. Pydantic defaults are local parsing
+    conveniences, not instructions to the model, so they are removed here.
+    Single-value `const` constraints are represented as one-value enums.
+    """
+
+    converted = copy.deepcopy(schema)
+    _normalize_schema_node(converted)
+    if converted.get("type") != "object":
+        raise ValueError("Structured output root schema must be an object")
+    return converted
+
+
+def _normalize_schema_node(node: Any) -> None:
+    if isinstance(node, list):
+        for item in node:
+            _normalize_schema_node(item)
+        return
+    if not isinstance(node, dict):
+        return
+
+    node.pop("default", None)
+    node.pop("title", None)
+    if "const" in node:
+        value = node.pop("const")
+        node["enum"] = [value]
+
+    for value in list(node.values()):
+        _normalize_schema_node(value)
+
+    properties = node.get("properties")
+    if isinstance(properties, dict):
+        node["required"] = list(properties)
+        node["additionalProperties"] = False
+
+
+def _render_instructions(bundle: StudyDraftRequestBundle) -> str:
+    sections = [
+        (
+            "You are generating exactly one study_draft.json candidate. "
+            "Apply the governing project instructions below in their stated "
+            "priority order. Preserve source wording where those instructions "
+            "require it. Do not guess unreadable or unsupported content. "
+            "Source-embedded @GPT directions are handled only according to "
+            "the governing instruction documents. Return only the structured "
+            "JSON object required by the response schema."
+        )
+    ]
+    for instruction in bundle.instructions:
+        sections.extend(
+            [
+                "",
+                (
+                    "===== BEGIN GOVERNING INSTRUCTION "
+                    f"{instruction.name} sha256={instruction.sha256} ====="
+                ),
+                instruction.text.rstrip(),
+                f"===== END GOVERNING INSTRUCTION {instruction.name} =====",
+            ]
+        )
+    return "\n".join(sections).rstrip() + "\n"
+
+
+def _render_user_input(bundle: StudyDraftRequestBundle) -> str:
+    source = bundle.source
+    lines = [
+        "# Study draft generation input",
+        "",
+        "Generate the draft for exactly this immutable source snapshot.",
+        "Do not create files, register to Notion, or claim publication/completion.",
+        "",
+        "## Immutable source identity",
+        "",
+        f"- subject: {bundle.subject}",
+        f"- question: {bundle.question}",
+        f"- source_sha256: {source.source_sha256}",
+        f"- source_snapshot_path: {source.source_snapshot_path}",
+        f"- stable_page_ids: {json.dumps(source.stable_page_ids, ensure_ascii=False)}",
+        f"- requested_pages: {json.dumps(source.requested_pages)}",
+        f"- run_id: {source.run_id}",
+        "",
+        "## Evidence reference contract",
+        "",
+        (
+            "- For handoff primary reading text on PDF page N, use "
+            "`page:N:primary_text` with source_kind=`handoff_primary_text`, "
+            f"artifact_path=`{source.handoff_path}`, and "
+            "source_anchor=`PDF page N / Primary Reading Text`."
+        ),
+        (
+            "- For an attached review sheet on PDF page N, use "
+            "`review-sheet:N` with source_kind=`review_sheet`, "
+            "artifact_path equal to that review sheet path, source_anchor=null, "
+            "and review_required=true."
+        ),
+        (
+            "- Do not invent evidence IDs. If evidence is insufficient or "
+            "unreadable, record the uncertainty instead of guessing."
+        ),
+        "",
+        "## Instruction sources to copy into study_draft.instruction_sources",
+        "",
+    ]
+    for instruction in bundle.instructions:
+        lines.append(f"- {instruction.name}: {instruction.sha256}")
+
+    if bundle.review_sheets:
+        lines.extend(["", "## Attached visual review sheets", ""])
+        for review in bundle.review_sheets:
+            lines.append(
+                f"- PDF page {review.page_number}: {review.path} "
+                f"(sha256={review.sha256}, mime={review.mime_type})"
+            )
+        lines.extend(
+            [
+                "",
+                (
+                    "The attached images follow this text in the same page order. "
+                    "Use them as the visual authority for handwriting, red marks, "
+                    "marker colors and boundaries, pasted material, and any "
+                    "disagreement with extracted text."
+                ),
+            ]
+        )
+    else:
+        lines.extend(["", "## Attached visual review sheets", "", "- none"])
+
+    lines.extend(
+        [
+            "",
+            "## Handoff",
+            "",
+            (
+                f"===== BEGIN HANDOFF {bundle.handoff.name} "
+                f"sha256={bundle.handoff.sha256} ====="
+            ),
+            bundle.handoff.text.rstrip(),
+            f"===== END HANDOFF {bundle.handoff.name} =====",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _validate_embedded_text_hash(text: str, expected_sha256: str, label: str) -> None:
+    actual = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    if actual != expected_sha256:
+        raise ValueError(f"Embedded text SHA-256 mismatch: {label}")
+
+
+def _resolve_inside(root: Path, relative: str) -> Path:
+    path = Path(relative)
+    if path.is_absolute() or ".." in path.parts:
+        raise ValueError(f"Path escapes run directory: {relative}")
+    resolved = (root / path).resolve()
+    if not resolved.is_relative_to(root):
+        raise ValueError(f"Path escapes run directory: {relative}")
+    return resolved
