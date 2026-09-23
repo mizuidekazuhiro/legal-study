@@ -1,7 +1,10 @@
 import json
 from pathlib import Path
 
-from legal_study.chat_bridge_worker import process_bridge_command
+import pytest
+
+import legal_study.chat_bridge_worker as bridge_worker
+from legal_study.chat_bridge_worker import BridgeCommand, process_bridge_command
 from legal_study.io_utils import file_sha256
 from legal_study.settings import LocalSettings
 
@@ -191,3 +194,99 @@ def test_notion_command_requires_explicit_authorization(tmp_path: Path) -> None:
         assert "Notion actions require" in str(exc)
     else:
         raise AssertionError("Expected unauthorized Notion command to be rejected")
+
+
+@pytest.mark.parametrize(
+    ("result_file", "accepted"),
+    [
+        ("10_approved/result.json", True),
+        ("00_pending/result.json", False),
+        ("20_commands/result.json", False),
+        ("30_receipts/result.json", False),
+        ("99_failed/result.json", False),
+        ("result.json", False),
+        ("../10_approved/result.json", False),
+        ("C:/bridge/10_approved/result.json", False),
+    ],
+)
+def test_result_file_must_be_directly_in_approved_folder(
+    result_file: str, accepted: bool
+) -> None:
+    command = {
+        "command_id": "path-check-001",
+        "action": "apply_obsidian",
+        "subject": "criminal",
+        "question": "16",
+        "source_sha256": "a" * 64,
+        "run_id": "r" * 64,
+        "result_file": result_file,
+        "result_sha256": "b" * 64,
+        "approved_at": "2026-09-23T00:00:00Z",
+        "approval_text": "承認",
+    }
+    if accepted:
+        assert BridgeCommand.model_validate(command).result_file == result_file
+    else:
+        with pytest.raises(ValueError, match="10_approved"):
+            BridgeCommand.model_validate(command)
+
+
+@pytest.mark.parametrize("action", ["register_notion", "apply_all"])
+def test_invalid_result_fails_before_any_external_action(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, action: str
+) -> None:
+    settings = LocalSettings(home=tmp_path / "home")
+    settings.ensure()
+    _run, run_id, source_sha = _write_run(settings)
+    bridge = tmp_path / "LegalStudy_ChatBridge"
+    for name in ("10_approved", "20_commands", "30_receipts", "99_failed"):
+        (bridge / name).mkdir(parents=True)
+    result_file = bridge / "10_approved" / "invalid.json"
+    _write_result(result_file, source_sha)
+    payload = json.loads(result_file.read_text(encoding="utf-8"))
+    payload["unresolved"] = ["要確認"]
+    result_file.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    command = {
+        "schema_version": "chat_bridge_command.v1",
+        "command_id": f"invalid-{action}-001",
+        "action": action,
+        "subject": "criminal",
+        "question": "16",
+        "source_sha256": source_sha,
+        "run_id": run_id,
+        "result_file": "10_approved/invalid.json",
+        "result_sha256": file_sha256(result_file),
+        "approved_at": "2026-09-23T00:00:00Z",
+        "approval_text": "承認",
+        "notion_registration_authorized": True,
+    }
+    command_path = bridge / "20_commands" / f"{action}.json"
+    command_path.write_text(json.dumps(command, ensure_ascii=False), encoding="utf-8")
+
+    calls = {"obsidian": 0, "notion": 0}
+
+    def fail_if_obsidian_called(**_kwargs: object) -> None:
+        calls["obsidian"] += 1
+        raise AssertionError("Obsidian must not be called")
+
+    class FakeRegistrar:
+        def register(self, **_kwargs: object) -> None:
+            calls["notion"] += 1
+            raise AssertionError("Notion must not be called")
+
+    monkeypatch.setattr(bridge_worker, "apply_chat_result", fail_if_obsidian_called)
+    inbox = tmp_path / "Obsidian_Inbox"
+    inbox.mkdir()
+    result = process_bridge_command(
+        command_path=command_path,
+        bridge_root=bridge,
+        obsidian_inbox=inbox,
+        settings=settings,
+        notion_registrar=FakeRegistrar(),
+    )
+
+    assert result.status == "FAILED"
+    receipt = json.loads(Path(result.receipt_path or "").read_text(encoding="utf-8"))
+    assert receipt["status"] == "failed"
+    assert "UNRESOLVED_ITEMS_REMAIN" in receipt["error"]
+    assert calls == {"obsidian": 0, "notion": 0}

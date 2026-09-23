@@ -11,7 +11,7 @@ from typing import Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from legal_study.chat_result import apply_chat_result
+from legal_study.chat_result import apply_chat_result, validate_chat_result
 from legal_study.io_utils import atomic_write_json, file_sha256
 from legal_study.run_manifest import RunManifest
 from legal_study.settings import LocalSettings
@@ -62,8 +62,10 @@ class BridgeCommand(StrictBridgeModel):
             or PureWindowsPath(cleaned).is_absolute()
             or ".." in path.parts
             or path.suffix.lower() != ".json"
+            or path.parts != ("10_approved", path.name)
+            or cleaned != path.as_posix()
         ):
-            raise ValueError("result_file must be a safe bridge-relative JSON path")
+            raise ValueError("result_file must be 10_approved/<filename>.json")
         return path.as_posix()
 
     @model_validator(mode="after")
@@ -352,6 +354,8 @@ def process_bridge_command(
 
     try:
         result_path = _resolve_bridge_file(layout.root, command.result_file)
+        if result_path.parent != layout.approved.resolve():
+            raise ValueError("Approved result must remain in 10_approved")
         if not result_path.is_file():
             raise FileNotFoundError(f"Approved result is missing: {result_path}")
         actual_result_sha = file_sha256(result_path)
@@ -365,6 +369,11 @@ def process_bridge_command(
             question=command.question,
             source_sha256=command.source_sha256,
         )
+        validation = validate_chat_result(result_path=result_path, run_dir=run_dir)
+        if not validation.valid:
+            raise RuntimeError(
+                "Chat result validation failed: " + ", ".join(validation.issues)
+            )
 
         obsidian_status: str | None = None
         obsidian_path: str | None = None
