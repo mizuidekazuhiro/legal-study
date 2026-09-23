@@ -307,6 +307,37 @@ def _render_user_input(bundle: StudyDraftRequestBundle) -> str:
     for instruction in bundle.instructions:
         lines.append(f"- {instruction.name}: {instruction.sha256}")
 
+    lines.extend(["", "## Canonical logical marker candidates", ""])
+    if bundle.logical_markers:
+        lines.extend(
+            [
+                (
+                    "These records are machine-derived marker candidates from "
+                    "canonical_source.json. Use the attached review-sheet image as "
+                    "the visual authority. A review_status such as NEEDS_REVIEW is "
+                    "an instruction to perform that visual verification now; it is "
+                    "not, by itself, a reason to leave the final draft unresolved. "
+                    "Check every listed candidate on its page. If visually confirmed, "
+                    "resolve it and reproduce the confirmed color/range in the "
+                    "Obsidian marker transcription. If the image does not permit a "
+                    "safe boundary decision, leave only that specific marker unresolved."
+                ),
+                "",
+            ]
+        )
+        for marker in bundle.logical_markers:
+            lines.append(
+                "- "
+                f"{marker.id} | page={marker.page_number} | color={marker.color} | "
+                f"chars={marker.start_char}-{marker.end_char} | "
+                f"review_status={marker.review_status} | "
+                f"boundary_confidence={marker.boundary_confidence} | "
+                f"evidence_image={marker.evidence_image} | "
+                f"exact_text={json.dumps(marker.exact_text, ensure_ascii=False)}"
+            )
+    else:
+        lines.append("- none")
+
     if bundle.review_sheets:
         lines.extend(["", "## Attached visual review sheets", ""])
         for review in bundle.review_sheets:
