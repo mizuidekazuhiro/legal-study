@@ -67,7 +67,7 @@ def _run_checker(tmp_path: Path, *, omit: str | None = None) -> tuple[subprocess
 
     paths = {
         "RepoRoot": tmp_path / "repo",
-        "PythonPath": tmp_path / "fake-python.cmd",
+        "PythonPath": tmp_path / ("fake-python.cmd" if os.name == "nt" else "fake-python.sh"),
         "HomePath": tmp_path / "home",
         "BridgeRoot": tmp_path / "LegalStudy_ChatBridge",
         "ObsidianInbox": tmp_path / "Obsidian_Inbox",
@@ -94,10 +94,13 @@ def _run_checker(tmp_path: Path, *, omit: str | None = None) -> tuple[subprocess
         check=True,
     )
     if omit != "PythonPath":
-        paths["PythonPath"].write_text(
-            "@echo off\r\necho Offline PaddleOCR: READY\r\n",
-            encoding="ascii",
-        )
+        if os.name == "nt":
+            fake_python = "@echo off\r\necho Offline PaddleOCR: READY\r\n"
+        else:
+            fake_python = "#!/bin/sh\nprintf 'Offline PaddleOCR: READY\\n'\n"
+        paths["PythonPath"].write_text(fake_python, encoding="ascii")
+        if os.name != "nt":
+            paths["PythonPath"].chmod(0o755)
     (paths["HomePath"] / "state.sqlite3").touch()
     for folder in ("00_pending", "10_approved", "20_commands", "30_receipts", "99_failed"):
         if folder != omit and omit != "BridgeRoot":
