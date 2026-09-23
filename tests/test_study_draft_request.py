@@ -45,6 +45,20 @@ def _write_inputs(run_dir: Path, instruction_dir: Path) -> None:
         "handoff_review_sheets": {
             "110": "handoff_review/page-0110-review.png",
         },
+        "logical_markers": [
+            {
+                "id": "p0110-logical-mark-001",
+                "page_number": 110,
+                "color": "yellow",
+                "exact_text": "講師答案本文",
+                "start_char": 10,
+                "end_char": 15,
+                "boundary_confidence": 0.65,
+                "review_status": "NEEDS_REVIEW",
+                "reason": "logical_marker_boundary_requires_review",
+                "evidence_image": "renders/page-0110.png",
+            }
+        ],
     }
     (run_dir / "canonical_source.json").write_text(
         json.dumps(canonical, ensure_ascii=False),
@@ -112,6 +126,14 @@ def test_build_bundle_contains_exact_inputs_and_response_schema(tmp_path: Path) 
     assert all(len(item.sha256) == 64 for item in bundle.instructions)
     assert len(bundle.review_sheets) == 1
     assert bundle.primary_text_review_required_pages == [110]
+    assert len(bundle.logical_markers) == 1
+    marker = bundle.logical_markers[0]
+    assert marker.id == "p0110-logical-mark-001"
+    assert marker.color == "yellow"
+    assert marker.exact_text == "講師答案本文"
+    assert marker.start_char == 10
+    assert marker.end_char == 15
+    assert marker.review_status == "NEEDS_REVIEW"
     review = bundle.review_sheets[0]
     assert review.page_number == 110
     assert review.path == "handoff_review/page-0110-review.png"
