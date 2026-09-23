@@ -11,7 +11,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from legal_study.study_draft_request import StudyDraftRequestBundle
 
-
 HOST_SOURCE_SNAPSHOT_PATH_SENTINEL = "__HOST_SOURCE_SNAPSHOT_PATH__"
 
 
