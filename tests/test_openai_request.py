@@ -56,6 +56,20 @@ def _write_inputs(run_dir: Path, instruction_dir: Path) -> None:
         "handoff_review_sheets": {
             "110": "handoff_review/page-0110-review.png",
         },
+        "logical_markers": [
+            {
+                "id": "p0110-logical-mark-001",
+                "page_number": 110,
+                "color": "yellow",
+                "exact_text": "講師答案本文",
+                "start_char": 10,
+                "end_char": 15,
+                "boundary_confidence": 0.65,
+                "review_status": "NEEDS_REVIEW",
+                "reason": "logical_marker_boundary_requires_review",
+                "evidence_image": "renders/page-0110.png",
+            }
+        ],
     }
     (run_dir / "canonical_source.json").write_text(
         json.dumps(canonical, ensure_ascii=False),
@@ -138,6 +152,12 @@ def test_request_template_matches_responses_multimodal_shape(tmp_path: Path) -> 
     assert "page:110:primary_text" in content[0]["text"]
     assert "review_required=true" in content[0]["text"]
     assert "review-sheet:110" in content[0]["text"]
+    assert "## Canonical logical marker candidates" in content[0]["text"]
+    assert "p0110-logical-mark-001" in content[0]["text"]
+    assert "color=yellow" in content[0]["text"]
+    assert 'exact_text="講師答案本文"' in content[0]["text"]
+    assert "review_status=NEEDS_REVIEW" in content[0]["text"]
+    assert "not, by itself, a reason to leave the final draft unresolved" in content[0]["text"]
 
     image = content[1]
     assert image["type"] == "input_image"
