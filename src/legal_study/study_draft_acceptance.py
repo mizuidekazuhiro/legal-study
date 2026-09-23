@@ -9,7 +9,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from legal_study.study_draft import DraftText, StudyDraft
+from legal_study.study_draft import StudyDraft
 from legal_study.study_draft_validation import validate_study_draft_evidence
 
 
