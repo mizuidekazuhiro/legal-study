@@ -159,7 +159,7 @@ def _embedded_image_detection(document: pymupdf.Document, page: pymupdf.Page) ->
         try:
             extracted = document.extract_image(xref)
             image = Image.open(io.BytesIO(extracted["image"])).convert("RGB")
-        except Exception:
+        except (KeyError, OSError, RuntimeError, UnidentifiedImageError):
             continue
         width, height = image.size
         if width < 80 or height < 28 or height == 0:
