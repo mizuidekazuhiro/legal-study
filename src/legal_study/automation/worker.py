@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 from pydantic import BaseModel, Field
 
 from legal_study.automation.queue import AutomationStateStore, WorkStatus
@@ -150,7 +148,7 @@ def process_next_work_item(
         result.run_id = prepared.manifest.run_id
         result.reason = "INGEST_COMPLETED"
         return result
-    except Exception as exc:
+    except (KeyError, OSError, RuntimeError, ValueError) as exc:
         current = questions.get(item.subject, item.question)
         if (
             current is not None
