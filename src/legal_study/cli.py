@@ -11,6 +11,7 @@ from rich.console import Console
 from rich.table import Table
 
 from legal_study.automation.file_watcher import iter_file_updates
+from legal_study.automation.orchestrator import watch_pdf_updates
 from legal_study.automation.sync_stability import mark_question_sync_stable
 from legal_study.completion.done_marker import detect_done_markers, save_done_stamp
 from legal_study.completion.question_resolution import apply_done_markers
@@ -139,13 +140,70 @@ def apply_done(
     )
 
 
+@app.command("watch-study")
+def watch_study(
+    pdf: Annotated[Path, typer.Argument(exists=True, readable=True)],
+    subject: Annotated[str, typer.Option(help="Subject key, e.g. criminal")] = "criminal",
+    poll_interval_seconds: Annotated[
+        float,
+        typer.Option(help="Idle poll interval in seconds. Default is one minute."),
+    ] = 60.0,
+    stability_interval_seconds: Annotated[
+        float,
+        typer.Option(help="Seconds between active stability checks after an update."),
+    ] = 5.0,
+    stability_equal_observations: Annotated[
+        int,
+        typer.Option(help="Equal metadata observations required before hash verification."),
+    ] = 3,
+    stability_timeout_seconds: Annotated[
+        float,
+        typer.Option(help="Maximum seconds to wait for a stable updated PDF."),
+    ] = 90.0,
+    max_backtrack: Annotated[
+        int,
+        typer.Option(help="Maximum pages to scan backward for the nearest 第N問 header."),
+    ] = 16,
+) -> None:
+    """Watch a study PDF and advance newly DONE questions to SYNC_STABLE."""
+    settings = LocalSettings()
+    settings.ensure()
+    engine = PaddleOcrEngine(model_root=settings.models_dir / "paddleocr")
+    console.print(
+        json.dumps(
+            {
+                "watching": str(pdf.expanduser().resolve()),
+                "subject": subject,
+                "poll_interval_seconds": poll_interval_seconds,
+                "stability_interval_seconds": stability_interval_seconds,
+            },
+            ensure_ascii=False,
+        )
+    )
+    try:
+        for result in watch_pdf_updates(
+            pdf,
+            subject=subject,
+            ocr_engine=engine,
+            settings=settings,
+            poll_interval_seconds=poll_interval_seconds,
+            stability_interval_seconds=stability_interval_seconds,
+            stability_equal_observations=stability_equal_observations,
+            stability_timeout_seconds=stability_timeout_seconds,
+            max_backtrack=max_backtrack,
+        ):
+            console.print(result.model_dump_json())
+    except KeyboardInterrupt:
+        console.print("Stopped.")
+
+
 @app.command("watch-file")
 def watch_file(
     pdf: Annotated[Path, typer.Argument(exists=True, readable=True)],
     poll_interval_seconds: Annotated[
         float,
         typer.Option(help="Seconds between cheap file metadata polls."),
-    ] = 2.0,
+    ] = 60.0,
 ) -> None:
     """Watch a Drive-synced PDF and emit one JSON object for each detected update."""
     console.print(
