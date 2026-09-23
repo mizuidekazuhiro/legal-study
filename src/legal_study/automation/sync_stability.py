@@ -191,3 +191,60 @@ def mark_question_sync_stable(
     result.current_status = updated.status
     result.state_updated = True
     return result
+
+
+
+def mark_question_sync_stable_from_verified_hash(
+    *,
+    subject: str,
+    question: str,
+    verified_sha256: str,
+    settings: LocalSettings | None = None,
+) -> SyncStabilityResult:
+    """Advance DONE_DETECTED -> SYNC_STABLE using a hash already verified stable."""
+    cfg = settings or LocalSettings()
+    cfg.ensure()
+    store = QuestionStateStore(cfg.state_db)
+    record = store.get(subject, question)
+    if record is None:
+        return SyncStabilityResult(
+            stable=True,
+            path="",
+            sha256=verified_sha256,
+            reason="QUESTION_STATE_MISSING",
+        )
+    if record.status != QuestionStatus.DONE_DETECTED:
+        return SyncStabilityResult(
+            stable=True,
+            path="",
+            sha256=verified_sha256,
+            reason="QUESTION_NOT_DONE_DETECTED",
+            previous_status=record.status,
+            current_status=record.status,
+        )
+    if record.latest_source_sha256 != verified_sha256:
+        return SyncStabilityResult(
+            stable=True,
+            path="",
+            sha256=verified_sha256,
+            reason="SOURCE_CHANGED_AFTER_DONE_DETECTION",
+            source_changed_requires_done_recheck=True,
+            previous_status=record.status,
+            current_status=record.status,
+        )
+
+    updated = store.transition(
+        subject,
+        question,
+        QuestionStatus.SYNC_STABLE,
+        latest_source_sha256=verified_sha256,
+    )
+    return SyncStabilityResult(
+        stable=True,
+        path="",
+        sha256=verified_sha256,
+        reason="VERIFIED_HASH_MATCHED_DONE_SOURCE",
+        previous_status=record.status,
+        current_status=updated.status,
+        state_updated=True,
+    )
