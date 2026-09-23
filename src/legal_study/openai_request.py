@@ -332,7 +332,7 @@ def _render_user_input(bundle: StudyDraftRequestBundle) -> str:
                 f"chars={marker.start_char}-{marker.end_char} | "
                 f"review_status={marker.review_status} | "
                 f"boundary_confidence={marker.boundary_confidence} | "
-                f"evidence_image={marker.evidence_image} | "
+                f"evidence_image={marker.evidence_image or 'null'} | "
                 f"exact_text={json.dumps(marker.exact_text, ensure_ascii=False)}"
             )
     else:
