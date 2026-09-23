@@ -16,8 +16,12 @@ from legal_study.completion.question_resolution import (
     CompletionApplyResult,
     apply_done_markers_to_snapshot,
 )
-from legal_study.page_identity import PageAlignment, SourcePageIndex, align_page_indexes
-from legal_study.page_identity import ensure_source_page_index
+from legal_study.page_identity import (
+    PageAlignment,
+    SourcePageIndex,
+    align_page_indexes,
+    ensure_source_page_index,
+)
 from legal_study.pdf.ocr.base import OcrEngine
 from legal_study.settings import LocalSettings
 from legal_study.source_store import snapshot_source
