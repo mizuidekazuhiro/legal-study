@@ -10,6 +10,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
 from legal_study.study_draft import DraftSource, study_draft_json_schema
+from legal_study.supplemental_retrieval import SupplementalRetrievalBundle
 
 
 class StrictBundleModel(BaseModel):
@@ -40,6 +41,7 @@ class StudyDraftRequestBundle(StrictBundleModel):
     instructions: list[BundleTextDocument] = Field(min_length=1)
     review_sheets: list[BundleReviewImage] = Field(default_factory=list)
     primary_text_review_required_pages: list[int] = Field(default_factory=list)
+    supplemental: SupplementalRetrievalBundle | None = None
     response_schema: dict[str, Any]
     response_schema_sha256: str = Field(min_length=64, max_length=64)
     output_filename: Literal["study_draft.json"] = "study_draft.json"
@@ -89,6 +91,7 @@ def build_study_draft_request_bundle(
     instruction_dir: Path,
     include_anki: bool = True,
     include_obsidian: bool = True,
+    supplemental: SupplementalRetrievalBundle | None = None,
 ) -> StudyDraftRequestBundle:
     """Build the deterministic, API-independent input bundle for one study draft.
 
@@ -98,6 +101,14 @@ def build_study_draft_request_bundle(
 
     root = run_dir.resolve()
     instruction_root = instruction_dir.resolve()
+
+    if supplemental is not None:
+        if supplemental.subject != subject or supplemental.question != question:
+            raise ValueError(
+                "Supplemental retrieval identity mismatch: "
+                f"supplemental=({supplemental.subject!r}, {supplemental.question!r}), "
+                f"request=({subject!r}, {question!r})"
+            )
 
     if subject != source_subject_hint(subject):
         raise ValueError("Subject normalization failed")
@@ -201,6 +212,7 @@ def build_study_draft_request_bundle(
         instructions=instructions,
         review_sheets=review_sheets,
         primary_text_review_required_pages=primary_text_review_required_pages,
+        supplemental=supplemental,
         response_schema=schema,
         response_schema_sha256=hashlib.sha256(schema_bytes).hexdigest(),
     )
