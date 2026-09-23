@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -34,7 +34,11 @@ class ObsidianArgumentPattern(StrictSupplementalModel):
         if not cleaned:
             raise ValueError("source_path must not be empty")
         path = Path(cleaned)
-        if path.is_absolute() or ".." in path.parts:
+        if (
+            path.is_absolute()
+            or PureWindowsPath(cleaned).is_absolute()
+            or ".." in path.parts
+        ):
             raise ValueError("Obsidian pattern path must be vault-relative")
         return path.as_posix()
 
@@ -69,7 +73,11 @@ class ExistingProblemNote(StrictSupplementalModel):
         if not cleaned:
             raise ValueError("relative_path must not be empty")
         path = Path(cleaned)
-        if path.is_absolute() or ".." in path.parts:
+        if (
+            path.is_absolute()
+            or PureWindowsPath(cleaned).is_absolute()
+            or ".." in path.parts
+        ):
             raise ValueError("Problem note path must be vault-relative")
         if path.suffix.lower() != ".md":
             raise ValueError("Problem note path must end in .md")
