@@ -14,12 +14,15 @@ from legal_study.automation.file_watcher import iter_file_updates
 from legal_study.automation.orchestrator import watch_pdf_updates
 from legal_study.automation.sync_stability import mark_question_sync_stable
 from legal_study.automation.worker import drain_pending_work, process_next_work_item
+from legal_study.chat_bridge_publish import publish_run_to_bridge
+from legal_study.chat_bridge_worker import watch_bridge_commands
 from legal_study.chat_packet import build_chat_packet
 from legal_study.chat_result import apply_chat_result, validate_chat_result
 from legal_study.completion.done_marker import detect_done_markers, save_done_stamp
 from legal_study.completion.question_resolution import apply_done_markers
 from legal_study.finalize import finalize_existing_run
 from legal_study.io_utils import atomic_write_text
+from legal_study.notion_registration import LegalQuestionBankRegistrar
 from legal_study.openai_poc import (
     OpenAIPocConfig,
     build_study_draft_bundle_from_run,
@@ -172,6 +175,17 @@ def watch_study(
         int,
         typer.Option(help="Maximum pages to scan backward for the nearest 第N問 header."),
     ] = 16,
+    bridge_root: Annotated[
+        Path | None,
+        typer.Option(
+            "--bridge-root",
+            envvar="LEGAL_STUDY_CHAT_BRIDGE_ROOT",
+            help=(
+                "Existing Drive-synced LegalStudy_ChatBridge root. "
+                "Completed runs are published to 00_pending."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """Watch a study PDF, queue DONE questions, and ingest them serially."""
     settings = LocalSettings()
@@ -208,6 +222,7 @@ def watch_study(
             for worker_result in drain_pending_work(
                 pipeline=pipeline,
                 settings=settings,
+                bridge_root=bridge_root,
             ):
                 console.print(worker_result.model_dump_json())
     except KeyboardInterrupt:
@@ -220,6 +235,14 @@ def process_queue(
         bool,
         typer.Option(help="Process at most one pending question."),
     ] = False,
+    bridge_root: Annotated[
+        Path | None,
+        typer.Option(
+            "--bridge-root",
+            envvar="LEGAL_STUDY_CHAT_BRIDGE_ROOT",
+            help="Optional Drive-synced LegalStudy_ChatBridge root.",
+        ),
+    ] = None,
 ) -> None:
     """Run pending PDF-ingest work serially from the persistent queue."""
     settings = LocalSettings()
@@ -230,11 +253,121 @@ def process_queue(
         routing_config=OcrRoutingConfig(),
     )
     if once:
-        result = process_next_work_item(pipeline=pipeline, settings=settings)
+        result = process_next_work_item(
+            pipeline=pipeline,
+            settings=settings,
+            bridge_root=bridge_root,
+        )
         console.print(result.model_dump_json())
         return
-    for result in drain_pending_work(pipeline=pipeline, settings=settings):
+    for result in drain_pending_work(
+        pipeline=pipeline,
+        settings=settings,
+        bridge_root=bridge_root,
+    ):
         console.print(result.model_dump_json())
+
+
+@app.command("publish-chat-packet")
+def publish_chat_packet_command(
+    run_dir: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=False, readable=True),
+    ],
+    bridge_root: Annotated[
+        Path,
+        typer.Option(
+            "--bridge-root",
+            envvar="LEGAL_STUDY_CHAT_BRIDGE_ROOT",
+            exists=True,
+            file_okay=False,
+            readable=True,
+            help="Existing Drive-synced LegalStudy_ChatBridge root.",
+        ),
+    ],
+) -> None:
+    """Publish one completed run into the bridge 00_pending folder."""
+
+    result = publish_run_to_bridge(
+        run_dir=run_dir,
+        bridge_root=bridge_root,
+    )
+    console.print(result.model_dump_json(indent=2))
+
+
+@app.command("watch-chat-bridge")
+def watch_chat_bridge_command(
+    bridge_root: Annotated[
+        Path,
+        typer.Option(
+            "--bridge-root",
+            envvar="LEGAL_STUDY_CHAT_BRIDGE_ROOT",
+            exists=True,
+            file_okay=False,
+            readable=True,
+            help="Drive-synced LegalStudy_ChatBridge root.",
+        ),
+    ],
+    obsidian_inbox: Annotated[
+        Path,
+        typer.Option(
+            "--obsidian-inbox",
+            envvar="LEGAL_STUDY_OBSIDIAN_INBOX",
+            exists=True,
+            file_okay=False,
+            readable=True,
+            help="Existing local Google Drive Obsidian_Inbox root.",
+        ),
+    ],
+    enable_notion: Annotated[
+        bool,
+        typer.Option(
+            "--enable-notion",
+            help=(
+                "Allow explicit register_notion/apply_all commands to use the "
+                "configured Legal Question Bank API credentials."
+            ),
+        ),
+    ] = False,
+    poll_interval_seconds: Annotated[
+        float,
+        typer.Option(help="Seconds between command-folder scans."),
+    ] = 5.0,
+    stable_seconds: Annotated[
+        float,
+        typer.Option(help="Seconds a synced command file must remain unchanged."),
+    ] = 3.0,
+) -> None:
+    """Watch Drive bridge commands and apply only explicitly authorized actions."""
+
+    registrar_factory = (
+        (lambda: LegalQuestionBankRegistrar())
+        if enable_notion
+        else None
+    )
+    console.print(
+        json.dumps(
+            {
+                "bridge_root": str(bridge_root.expanduser().resolve()),
+                "obsidian_inbox": str(obsidian_inbox.expanduser().resolve()),
+                "enable_notion": enable_notion,
+                "poll_interval_seconds": poll_interval_seconds,
+                "stable_seconds": stable_seconds,
+            },
+            ensure_ascii=False,
+        )
+    )
+    try:
+        for result in watch_bridge_commands(
+            bridge_root=bridge_root,
+            obsidian_inbox=obsidian_inbox,
+            notion_registrar_factory=registrar_factory,
+            poll_interval_seconds=poll_interval_seconds,
+            stable_seconds=stable_seconds,
+        ):
+            console.print(result.model_dump_json())
+    except KeyboardInterrupt:
+        console.print("Stopped.")
 
 
 @app.command("build-chat-packet")
