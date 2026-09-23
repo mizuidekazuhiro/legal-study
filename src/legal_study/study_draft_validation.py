@@ -377,12 +377,10 @@ def _build_evidence_index(
             if isinstance(issue, dict):
                 enriched = dict(issue)
                 enriched.setdefault("page_number", task.get("page_number"))
-                _canonical_locator(
+                _review_issue_locator(
                     index,
                     item=enriched,
-                    default_kind="review_issue",
                     artifact_path=canonical_path,
-                    force_review=True,
                 )
 
     for page, path in dict(canonical.get("handoff_review_sheets", {})).items():
@@ -398,6 +396,52 @@ def _build_evidence_index(
             ),
         )
     return index
+
+
+def _review_issue_locator(
+    index: dict[str, _EvidenceLocator],
+    *,
+    item: dict[str, Any],
+    artifact_path: str,
+) -> None:
+    """Index a review issue without changing the provenance of mirrored evidence.
+
+    needs_review.issues intentionally reuses the original evidence id for items
+    such as logical markers and reconciliation records. When that happens, the
+    review entry is an annotation on the same evidence, not a second provenance
+    source. Preserve the original locator and only promote review_required.
+    """
+
+    evidence_id = item.get("id")
+    if not isinstance(evidence_id, str) or not evidence_id:
+        return
+
+    existing = index.get(evidence_id)
+    if existing is None:
+        _canonical_locator(
+            index,
+            item=item,
+            default_kind="review_issue",
+            artifact_path=artifact_path,
+            force_review=True,
+        )
+        return
+
+    page_number = item.get("page_number")
+    normalized_page = int(page_number) if page_number is not None else None
+    if existing.page_number != normalized_page or existing.artifact_path != artifact_path:
+        raise ValueError(
+            f"Duplicate evidence id with conflicting provenance: {evidence_id}"
+        )
+
+    index[evidence_id] = _EvidenceLocator(
+        evidence_id=existing.evidence_id,
+        page_number=existing.page_number,
+        source_kind=existing.source_kind,
+        artifact_path=existing.artifact_path,
+        source_anchor=existing.source_anchor,
+        review_required=True,
+    )
 
 
 def _canonical_locator(
