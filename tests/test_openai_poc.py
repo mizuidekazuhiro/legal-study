@@ -275,6 +275,7 @@ def test_one_question_poc_calls_responses_once_and_accepts_candidate(tmp_path: P
     assert request["model"] == "gpt-5.6"
     assert request["reasoning"] == {"effort": "high", "mode": "standard"}
     assert request["store"] is False
+    assert request["background"] is True
     assert request["max_output_tokens"] == 64000
     assert request["text"]["format"]["type"] == "json_schema"
     assert request["input"][0]["content"][1]["type"] == "input_image"
@@ -530,3 +531,46 @@ def test_host_source_snapshot_sentinel_is_injected_before_binding_and_acceptance
         (run_dir / "study_draft_api_raw_response.json").read_text(encoding="utf-8")
     )
     assert raw["source"]["source_snapshot_path"] == HOST_SOURCE_SNAPSHOT_PATH_SENTINEL
+
+
+def test_background_response_is_polled_to_completion(tmp_path: Path) -> None:
+    run_dir, bundle = _bundle(tmp_path)
+    queued = _response(status="in_progress")
+    completed = _response(
+        status="completed",
+        output_text=json.dumps(_draft_payload(bundle), ensure_ascii=False),
+    )
+
+    class BackgroundResponses:
+        def __init__(self):
+            self.create_calls = []
+            self.retrieve_calls = []
+
+        def create(self, **kwargs):
+            self.create_calls.append(kwargs)
+            return queued
+
+        def retrieve(self, response_id):
+            self.retrieve_calls.append(response_id)
+            return completed
+
+    responses = BackgroundResponses()
+    client = SimpleNamespace(responses=responses)
+
+    result = run_openai_study_draft_poc(
+        bundle=bundle,
+        run_dir=run_dir,
+        client=client,
+        config=OpenAIPocConfig(poll_interval_seconds=0.1),
+    )
+
+    assert result.accepted is True
+    assert len(responses.create_calls) == 1
+    assert responses.create_calls[0]["background"] is True
+    assert responses.retrieve_calls == ["resp_test_123"]
+    receipt = json.loads(
+        (run_dir / "study_draft_api_receipt.json").read_text(encoding="utf-8")
+    )
+    assert receipt["state"] == "COMPLETED"
+    assert receipt["response_id"] == "resp_test_123"
+    assert receipt["background"] is True
