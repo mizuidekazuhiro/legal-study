@@ -11,6 +11,7 @@ from rich.console import Console
 from rich.table import Table
 
 from legal_study.completion.done_marker import detect_done_markers, save_done_stamp
+from legal_study.completion.question_resolution import apply_done_markers
 from legal_study.finalize import finalize_existing_run
 from legal_study.io_utils import atomic_write_text
 from legal_study.page_identity import (
@@ -86,6 +87,48 @@ def detect_done(
                 "detected_pages": [
                     item.page_number for item in results if item.detected
                 ],
+                "results": [item.model_dump(mode="json") for item in results],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+
+@app.command("apply-done")
+def apply_done(
+    pdf: Annotated[Path, typer.Argument(exists=True, readable=True)],
+    subject: Annotated[str, typer.Option(help="Subject key, e.g. criminal")] = "criminal",
+    pages: Annotated[
+        str | None,
+        typer.Option(help="1-based pages to inspect for DONE, e.g. 165 or 160-166"),
+    ] = None,
+    max_backtrack: Annotated[
+        int,
+        typer.Option(help="Maximum pages to scan backward for the nearest 第N問 header."),
+    ] = 16,
+    ocr: Annotated[str, typer.Option(help="Question-header OCR backend; currently paddle")] = "paddle",
+) -> None:
+    """Resolve detected DONE stamps to questions and persist DONE_DETECTED state."""
+    settings = LocalSettings()
+    settings.ensure()
+    if ocr != "paddle":
+        raise typer.BadParameter("ocr must be 'paddle' for apply-done")
+    engine = PaddleOcrEngine(model_root=settings.models_dir / "paddleocr")
+    results = apply_done_markers(
+        pdf,
+        subject=subject,
+        ocr_engine=engine,
+        settings=settings,
+        pages=_parse_pages(pages),
+        max_backtrack=max_backtrack,
+    )
+    console.print(
+        json.dumps(
+            {
+                "source": str(pdf),
+                "subject": subject,
+                "detected_count": len(results),
                 "results": [item.model_dump(mode="json") for item in results],
             },
             ensure_ascii=False,
