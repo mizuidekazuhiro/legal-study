@@ -15,7 +15,7 @@ from legal_study.automation.orchestrator import watch_pdf_updates
 from legal_study.automation.sync_stability import mark_question_sync_stable
 from legal_study.automation.worker import drain_pending_work, process_next_work_item
 from legal_study.chat_packet import build_chat_packet
-from legal_study.chat_result import validate_chat_result
+from legal_study.chat_result import apply_chat_result, validate_chat_result
 from legal_study.completion.done_marker import detect_done_markers, save_done_stamp
 from legal_study.completion.question_resolution import apply_done_markers
 from legal_study.finalize import finalize_existing_run
@@ -264,6 +264,45 @@ def build_chat_packet_command(
         run_dir=run_dir,
         output_path=output,
         supplemental_path=supplemental,
+    )
+    console.print(result.model_dump_json(indent=2))
+
+
+@app.command("apply-chat-result")
+def apply_chat_result_command(
+    result_json: Annotated[
+        Path,
+        typer.Argument(exists=True, dir_okay=False, readable=True),
+    ],
+    run_dir: Annotated[
+        Path,
+        typer.Option("--run-dir", exists=True, file_okay=False, readable=True),
+    ],
+    obsidian_inbox: Annotated[
+        Path | None,
+        typer.Option(
+            "--obsidian-inbox",
+            help=(
+                "Optional existing Obsidian_Inbox root. If omitted, only local "
+                "validated artifacts are materialized in the run directory."
+            ),
+        ),
+    ] = None,
+    update_existing: Annotated[
+        bool,
+        typer.Option(
+            "--update-existing",
+            help="Allow replacement of a differing existing Inbox note.",
+        ),
+    ] = False,
+) -> None:
+    """Apply a validated ChatGPT result locally. Never mutates Notion."""
+
+    result = apply_chat_result(
+        result_path=result_json,
+        run_dir=run_dir,
+        obsidian_inbox=obsidian_inbox,
+        update_existing=update_existing,
     )
     console.print(result.model_dump_json(indent=2))
 
