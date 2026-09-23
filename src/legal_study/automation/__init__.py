@@ -21,17 +21,17 @@ from legal_study.automation.queue import (
     WorkItem,
     WorkStatus,
 )
-from legal_study.automation.worker import (
-    QueueWorkerResult,
-    drain_pending_work,
-    process_next_work_item,
-)
 from legal_study.automation.sync_stability import (
     FileObservation,
     SyncStabilityResult,
     mark_question_sync_stable,
     mark_question_sync_stable_from_verified_hash,
     wait_for_sync_stable,
+)
+from legal_study.automation.worker import (
+    QueueWorkerResult,
+    drain_pending_work,
+    process_next_work_item,
 )
 
 __all__ = [
@@ -48,6 +48,7 @@ __all__ = [
     "WorkItem",
     "WorkStatus",
     "changed_current_pages",
+    "drain_pending_work",
     "establish_stable_baseline",
     "iter_file_updates",
     "mark_question_sync_stable",
@@ -55,7 +56,6 @@ __all__ = [
     "process_next_work_item",
     "process_pdf_update",
     "recover_watch_startup",
-    "drain_pending_work",
     "wait_for_sync_stable",
     "watch_pdf_updates",
 ]
