@@ -38,12 +38,19 @@ def search_obsidian_argument_patterns(
 
     for query in cleaned_queries:
         normalized_query = _normalize(query)
-        matches = [
+        exact_matches = [
+            pattern
+            for pattern in patterns
+            if _is_exact_match(pattern=pattern, normalized_query=normalized_query)
+        ]
+        matches = exact_matches or [
             pattern
             for pattern in patterns
             if _matches(pattern=pattern, normalized_query=normalized_query)
         ]
-        matches.sort(key=lambda pattern: (_match_rank(pattern, normalized_query), pattern.pattern_id))
+        matches.sort(
+            key=lambda pattern: (_match_rank(pattern, normalized_query), pattern.pattern_id)
+        )
         matched_ids = [pattern.pattern_id for pattern in matches]
         attempts.append(
             SupplementalSearchAttempt(
@@ -145,6 +152,16 @@ def _argument_pattern_section(text: str) -> str:
     if start is None:
         return ""
     return "\n".join(lines[start:end]).strip() + "\n"
+
+
+def _is_exact_match(
+    *, pattern: ObsidianArgumentPattern, normalized_query: str
+) -> bool:
+    if _normalize(pattern.pattern_id) == normalized_query:
+        return True
+    if _normalize(pattern.title) == normalized_query:
+        return True
+    return any(_normalize(alias) == normalized_query for alias in pattern.aliases)
 
 
 def _matches(*, pattern: ObsidianArgumentPattern, normalized_query: str) -> bool:
