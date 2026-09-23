@@ -13,6 +13,7 @@ from rich.table import Table
 from legal_study.automation.file_watcher import iter_file_updates
 from legal_study.automation.orchestrator import watch_pdf_updates
 from legal_study.automation.sync_stability import mark_question_sync_stable
+from legal_study.automation.worker import drain_pending_work, process_next_work_item
 from legal_study.completion.done_marker import detect_done_markers, save_done_stamp
 from legal_study.completion.question_resolution import apply_done_markers
 from legal_study.finalize import finalize_existing_run
@@ -165,10 +166,14 @@ def watch_study(
         typer.Option(help="Maximum pages to scan backward for the nearest 第N問 header."),
     ] = 16,
 ) -> None:
-    """Watch a study PDF and advance newly DONE questions to SYNC_STABLE."""
+    """Watch a study PDF, queue DONE questions, and ingest them serially."""
     settings = LocalSettings()
     settings.ensure()
     engine = PaddleOcrEngine(model_root=settings.models_dir / "paddleocr")
+    pipeline = PdfIngestPipeline(
+        ocr_engine=engine,
+        routing_config=OcrRoutingConfig(),
+    )
     console.print(
         json.dumps(
             {
@@ -193,8 +198,36 @@ def watch_study(
             max_backtrack=max_backtrack,
         ):
             console.print(result.model_dump_json())
+            for worker_result in drain_pending_work(
+                pipeline=pipeline,
+                settings=settings,
+            ):
+                console.print(worker_result.model_dump_json())
     except KeyboardInterrupt:
         console.print("Stopped.")
+
+
+@app.command("process-queue")
+def process_queue(
+    once: Annotated[
+        bool,
+        typer.Option(help="Process at most one pending question."),
+    ] = False,
+) -> None:
+    """Run pending PDF-ingest work serially from the persistent queue."""
+    settings = LocalSettings()
+    settings.ensure()
+    engine = PaddleOcrEngine(model_root=settings.models_dir / "paddleocr")
+    pipeline = PdfIngestPipeline(
+        ocr_engine=engine,
+        routing_config=OcrRoutingConfig(),
+    )
+    if once:
+        result = process_next_work_item(pipeline=pipeline, settings=settings)
+        console.print(result.model_dump_json())
+        return
+    for result in drain_pending_work(pipeline=pipeline, settings=settings):
+        console.print(result.model_dump_json())
 
 
 @app.command("watch-file")
