@@ -244,3 +244,27 @@ def test_generated_study_draft_schema_has_no_defaults_or_consts(tmp_path: Path) 
 
     walk(schema)
     assert request.payload["input"][0]["content"][1]["detail"] == "original"
+
+
+def test_request_schema_binds_immutable_source_values(tmp_path: Path) -> None:
+    run_dir, bundle = _bundle(tmp_path)
+
+    request = build_openai_responses_request_template(
+        bundle=bundle,
+        run_dir=run_dir,
+    )
+    schema = request.payload["text"]["format"]["schema"]
+    source = schema["$defs"]["DraftSource"]["properties"]
+
+    assert source["source_sha256"]["enum"] == [bundle.source.source_sha256]
+    assert source["source_snapshot_path"]["enum"] == [
+        bundle.source.source_snapshot_path
+    ]
+    assert source["run_id"]["enum"] == [bundle.source.run_id]
+    assert source["handoff_path"]["enum"] == [bundle.source.handoff_path]
+    assert source["canonical_source_path"]["enum"] == [
+        "canonical_source.json"
+    ]
+    assert source["problem_validation_path"]["enum"] == [
+        "problem_validation.json"
+    ]
