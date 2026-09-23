@@ -141,8 +141,6 @@ def _binary_signature(image: Image.Image, size: tuple[int, int] = (120, 44)) -> 
     return normalized.point(lambda value: 255 if value >= 180 else 0, mode="1").convert("L")
 
 
-_TEMPLATE_SIGNATURE = _binary_signature(build_done_stamp_image())
-
 
 def _similarity(left: Image.Image, right: Image.Image) -> float:
     a = _binary_signature(left)
@@ -223,18 +221,39 @@ def _rendered_template_detection(page: pymupdf.Page, *, dpi: int = 144) -> DoneD
         if not ys or ys[-1] != max_y:
             ys.append(max_y)
 
+        scale_best_score = 0.0
+        scale_best_xy: tuple[int, int] | None = None
         for y in ys:
             for x in xs:
                 crop = search.crop((x, y, x + width, y + height))
                 score = _similarity(crop, scaled)
-                if score > best_score:
-                    best_score = score
-                    best_box = (
-                        search_left + x,
-                        search_top + y,
-                        search_left + x + width,
-                        search_top + y + height,
-                    )
+                if score > scale_best_score:
+                    scale_best_score = score
+                    scale_best_xy = (x, y)
+
+        if scale_best_xy is not None:
+            coarse_x, coarse_y = scale_best_xy
+            refine_left = max(0, coarse_x - x_step)
+            refine_right = min(max_x, coarse_x + x_step)
+            refine_top = max(0, coarse_y - y_step)
+            refine_bottom = min(max_y, coarse_y + y_step)
+            for y in range(refine_top, refine_bottom + 1, 2):
+                for x in range(refine_left, refine_right + 1, 2):
+                    crop = search.crop((x, y, x + width, y + height))
+                    score = _similarity(crop, scaled)
+                    if score > scale_best_score:
+                        scale_best_score = score
+                        scale_best_xy = (x, y)
+
+        if scale_best_xy is not None and scale_best_score > best_score:
+            x, y = scale_best_xy
+            best_score = scale_best_score
+            best_box = (
+                search_left + x,
+                search_top + y,
+                search_left + x + width,
+                search_top + y + height,
+            )
 
     return DoneDetection(
         page_number=page.number + 1,
