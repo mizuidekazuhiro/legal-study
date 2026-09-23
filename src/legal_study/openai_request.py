@@ -216,9 +216,31 @@ def _render_user_input(bundle: StudyDraftRequestBundle) -> str:
             "unreadable, record the uncertainty instead of guessing."
         ),
         "",
-        "## Instruction sources to copy into study_draft.instruction_sources",
+        "### Allowed evidence references",
         "",
     ]
+    for page_number in source.requested_pages:
+        lines.append(
+            f"- page:{page_number}:primary_text | page_number={page_number} | "
+            "source_kind=handoff_primary_text | "
+            f"artifact_path={source.handoff_path} | "
+            f"source_anchor=PDF page {page_number} / Primary Reading Text"
+        )
+    for review in bundle.review_sheets:
+        lines.append(
+            f"- review-sheet:{review.page_number} | "
+            f"page_number={review.page_number} | source_kind=review_sheet | "
+            f"artifact_path={review.path} | source_anchor=null | "
+            "review_required=true"
+        )
+
+    lines.extend(
+        [
+            "",
+            "## Instruction sources to copy into study_draft.instruction_sources",
+            "",
+        ]
+    )
     for instruction in bundle.instructions:
         lines.append(f"- {instruction.name}: {instruction.sha256}")
 
