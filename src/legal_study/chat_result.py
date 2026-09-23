@@ -28,6 +28,7 @@ class ChatAnkiCard(StrictChatResultModel):
     subject: str = Field(min_length=1)
     source: str = Field(min_length=1)
     pdf_page: str = Field(min_length=1)
+    pdf_page_number: int = Field(ge=1)
     topic: str = Field(min_length=1)
     subtopic: str = ""
     level: Literal["L1", "L2", "L3", "L4"]
