@@ -45,7 +45,7 @@ _OCR_STEP_VERSION = "4"
 _OCR_CHECKPOINT_SCHEMA_VERSION = 1
 _RECONCILIATION_STEP_VERSION = "3"
 _REPAIR_STEP_VERSION = "2"
-_PROBLEM_PACKET_STEP_VERSION = "7"
+_PROBLEM_PACKET_STEP_VERSION = "8"
 
 
 class PdfIngestPipeline:
@@ -290,6 +290,46 @@ class PdfIngestPipeline:
             file_sha256(artifact),
             *(file_sha256(path) for path in sorted(paths, key=str)),
         )
+
+    def _problem_packet_bundle_hash(
+        self,
+        out: Path,
+        packet_paths: list[Path],
+        validation_path: Path,
+    ) -> str | None:
+        if any(not path.is_file() for path in packet_paths):
+            return None
+        try:
+            validation = json.loads(validation_path.read_text(encoding="utf-8"))
+            upload_files = validation.get("upload_files", [])
+            if not isinstance(upload_files, list):
+                return None
+            review_refs = sorted(
+                {
+                    str(reference)
+                    for reference in upload_files
+                    if isinstance(reference, str)
+                    and reference.startswith("handoff_review/")
+                }
+            )
+            review_paths: list[tuple[str, Path]] = []
+            for reference in review_refs:
+                path = self._resolve_artifact(out, reference)
+                if not path.is_file():
+                    return None
+                review_paths.append((reference, path))
+        except (OSError, ValueError, json.JSONDecodeError):
+            return None
+
+        values = [
+            f"{path.relative_to(out).as_posix()}:{file_sha256(path)}"
+            for path in packet_paths
+        ]
+        values.extend(
+            f"{reference}:{file_sha256(path)}"
+            for reference, path in review_paths
+        )
+        return self._hash_values(*values)
 
     @staticmethod
     def _resolve_artifact(out: Path, reference: str) -> Path:
@@ -1124,16 +1164,17 @@ class PdfIngestPipeline:
             prepared.manifest.input_hash, step_name, *upstream_hashes
         )
         packet_paths = [canonical_path, markdown_path, handoff_path, validation_path]
-        if all(path.is_file() for path in packet_paths):
-            output_hash = self._hash_values(*(file_sha256(path) for path in packet_paths))
-            if state.can_resume(
-                prepared.manifest.run_id,
-                step_name,
-                input_hash=input_hash,
-                version=_PROBLEM_PACKET_STEP_VERSION,
-                output_hash=output_hash,
-            ):
-                return output_hash
+        output_hash = self._problem_packet_bundle_hash(
+            out, packet_paths, validation_path
+        )
+        if output_hash is not None and state.can_resume(
+            prepared.manifest.run_id,
+            step_name,
+            input_hash=input_hash,
+            version=_PROBLEM_PACKET_STEP_VERSION,
+            output_hash=output_hash,
+        ):
+            return output_hash
 
         for path in packet_paths:
             self._archive_file(out, step_name, path)
@@ -1156,9 +1197,13 @@ class PdfIngestPipeline:
                 repair=repair,
                 ocr_payload=ocr_payload,
             )
-            output_hash = self._hash_values(
-                *(file_sha256(path) for path in packet_paths)
+            output_hash = self._problem_packet_bundle_hash(
+                out, packet_paths, validation_path
             )
+            if output_hash is None:
+                raise RuntimeError(
+                    "Problem packet is incomplete: review handoff artifacts are missing"
+                )
             state.complete_step(
                 prepared.manifest.run_id, step_name, output_hash=output_hash
             )
