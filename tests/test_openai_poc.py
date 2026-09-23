@@ -9,6 +9,7 @@ from legal_study.openai_poc import (
     build_study_draft_bundle_from_run,
     run_openai_study_draft_poc,
 )
+from legal_study.openai_request import HOST_SOURCE_SNAPSHOT_PATH_SENTINEL
 from legal_study.settings import LocalSettings
 from legal_study.state import QuestionStateStore
 from legal_study.study_draft import DraftSource
@@ -506,3 +507,26 @@ def test_response_instruction_sources_must_match_request_bundle(tmp_path: Path) 
     assert result.reason == "DRAFT_BUNDLE_MISMATCH"
     assert "BUNDLE_INSTRUCTION_SOURCES_MISMATCH" in result.acceptance_issue_codes
     assert not (run_dir / "study_draft.json").exists()
+
+
+def test_host_source_snapshot_sentinel_is_injected_before_binding_and_acceptance(
+    tmp_path: Path,
+) -> None:
+    run_dir, bundle = _bundle(tmp_path)
+    payload = _draft_payload(bundle)
+    payload["source"]["source_snapshot_path"] = HOST_SOURCE_SNAPSHOT_PATH_SENTINEL
+    client = FakeClient(_response(output_text=json.dumps(payload, ensure_ascii=False)))
+
+    result = run_openai_study_draft_poc(
+        bundle=bundle,
+        run_dir=run_dir,
+        client=client,
+    )
+
+    assert result.accepted is True
+    saved = json.loads((run_dir / "study_draft.json").read_text(encoding="utf-8"))
+    assert saved["source"]["source_snapshot_path"] == bundle.source.source_snapshot_path
+    raw = json.loads(
+        (run_dir / "study_draft_api_raw_response.json").read_text(encoding="utf-8")
+    )
+    assert raw["source"]["source_snapshot_path"] == HOST_SOURCE_SNAPSHOT_PATH_SENTINEL
