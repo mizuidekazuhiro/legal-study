@@ -8,7 +8,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from legal_study.io_utils import atomic_write_json
+from legal_study.io_utils import atomic_write_json, atomic_write_text
 from legal_study.openai_request import build_openai_responses_request_template
 from legal_study.problem_packet import handoff_markdown_filename
 from legal_study.run_manifest import RunManifest
@@ -35,6 +35,12 @@ class OpenAIPocConfig(StrictPocModel):
     image_detail: Literal["low", "high", "original", "auto"] = "original"
 
 
+class OpenAIPocAcceptanceIssue(StrictPocModel):
+    code: str = Field(min_length=1)
+    message: str = Field(min_length=1)
+    location: str | None = None
+
+
 class OpenAIPocResult(StrictPocModel):
     called: bool
     response_id: str | None = None
@@ -46,6 +52,8 @@ class OpenAIPocResult(StrictPocModel):
     study_draft_path: str | None = None
     draft_sha256: str | None = None
     acceptance_issue_codes: list[str] = Field(default_factory=list)
+    acceptance_issues: list[OpenAIPocAcceptanceIssue] = Field(default_factory=list)
+    raw_response_path: str | None = None
     usage: dict[str, int] = Field(default_factory=dict)
     receipt_path: str = "study_draft_api_receipt.json"
 
@@ -261,6 +269,10 @@ def run_openai_study_draft_poc(
         )
         return result
 
+    raw_response_path = root / "study_draft_api_raw_response.json"
+    atomic_write_text(raw_response_path, output_text)
+    raw_response_rel = raw_response_path.name
+
     binding_issue_codes = _bundle_binding_issue_codes(
         output_text=output_text,
         bundle=bundle,
@@ -274,6 +286,7 @@ def run_openai_study_draft_poc(
             accepted=False,
             reason="DRAFT_BUNDLE_MISMATCH",
             acceptance_issue_codes=binding_issue_codes,
+            raw_response_path=raw_response_rel,
             usage=usage,
         )
         _write_final_receipt(
@@ -293,6 +306,14 @@ def run_openai_study_draft_poc(
         run_dir=root,
     )
     issue_codes = [issue.code for issue in acceptance.issues]
+    acceptance_issues = [
+        OpenAIPocAcceptanceIssue(
+            code=issue.code,
+            message=issue.message,
+            location=issue.location,
+        )
+        for issue in acceptance.issues
+    ]
     result = OpenAIPocResult(
         called=True,
         response_id=response_id,
@@ -303,6 +324,8 @@ def run_openai_study_draft_poc(
         study_draft_path=acceptance.output_path,
         draft_sha256=acceptance.draft_sha256,
         acceptance_issue_codes=issue_codes,
+        acceptance_issues=acceptance_issues,
+        raw_response_path=raw_response_rel,
         usage=usage,
     )
     _write_final_receipt(
@@ -446,6 +469,11 @@ def _write_final_receipt(
         "study_draft_path": result.study_draft_path,
         "draft_sha256": result.draft_sha256,
         "acceptance_issue_codes": result.acceptance_issue_codes,
+        "acceptance_issues": [
+            issue.model_dump(mode="json")
+            for issue in result.acceptance_issues
+        ],
+        "raw_response_path": result.raw_response_path,
     }
     if incomplete_reason is not None:
         payload["incomplete_reason"] = incomplete_reason
