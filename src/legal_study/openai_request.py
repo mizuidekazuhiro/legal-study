@@ -141,6 +141,19 @@ def _bind_immutable_bundle_values(
     the final integrity check for lists and other compound values.
     """
 
+    root_properties = schema.get("properties")
+    if not isinstance(root_properties, dict):
+        raise TypeError("Structured output schema has no root properties")
+
+    for field_name, value in {
+        "subject": bundle.subject,
+        "question": bundle.question,
+    }.items():
+        field_schema = root_properties.get(field_name)
+        if not isinstance(field_schema, dict):
+            raise TypeError(f"Structured output schema missing root field: {field_name}")
+        field_schema["enum"] = [value]
+
     defs = schema.get("$defs")
     if not isinstance(defs, dict):
         raise TypeError("Structured output schema has no $defs")
@@ -242,7 +255,8 @@ def _render_user_input(bundle: StudyDraftRequestBundle) -> str:
             "- For handoff primary reading text on PDF page N, use "
             "`page:N:primary_text` with source_kind=`handoff_primary_text`, "
             f"artifact_path=`{source.handoff_path}`, and "
-            "source_anchor=`PDF page N / Primary Reading Text`."
+            "source_anchor=`PDF page N / Primary Reading Text`, and "
+            "review_required exactly as listed in Allowed evidence references."
         ),
         (
             "- For an attached review sheet on PDF page N, use "
@@ -258,12 +272,15 @@ def _render_user_input(bundle: StudyDraftRequestBundle) -> str:
         "### Allowed evidence references",
         "",
     ]
+    review_required_pages = set(bundle.primary_text_review_required_pages)
     for page_number in source.requested_pages:
+        review_required = str(page_number in review_required_pages).lower()
         lines.append(
             f"- page:{page_number}:primary_text | page_number={page_number} | "
             "source_kind=handoff_primary_text | "
             f"artifact_path={source.handoff_path} | "
-            f"source_anchor=PDF page {page_number} / Primary Reading Text"
+            f"source_anchor=PDF page {page_number} / Primary Reading Text | "
+            f"review_required={review_required}"
         )
     for review in bundle.review_sheets:
         lines.append(
