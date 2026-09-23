@@ -1,4 +1,4 @@
-import legal_study.provenance as provenance
+from legal_study import provenance
 from legal_study.provenance import resolve_code_revision
 
 
