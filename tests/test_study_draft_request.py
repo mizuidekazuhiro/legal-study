@@ -280,3 +280,29 @@ def test_supplemental_identity_must_match_request(tmp_path: Path) -> None:
             instruction_dir=instruction_dir,
             supplemental=supplemental,
         )
+
+
+def test_logical_marker_may_omit_evidence_image(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    instruction_dir = tmp_path / "instructions"
+    run_dir.mkdir()
+    _write_inputs(run_dir, instruction_dir)
+
+    canonical_path = run_dir / "canonical_source.json"
+    canonical = json.loads(canonical_path.read_text(encoding="utf-8"))
+    del canonical["logical_markers"][0]["evidence_image"]
+    canonical_path.write_text(
+        json.dumps(canonical, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    bundle = build_study_draft_request_bundle(
+        subject="criminal",
+        question="22",
+        source=_source(),
+        run_dir=run_dir,
+        instruction_dir=instruction_dir,
+    )
+
+    assert len(bundle.logical_markers) == 1
+    assert bundle.logical_markers[0].evidence_image is None
