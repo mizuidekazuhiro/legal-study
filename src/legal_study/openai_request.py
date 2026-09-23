@@ -78,6 +78,7 @@ def build_openai_responses_request_template(
         )
 
     strict_schema = make_openai_strict_schema(bundle.response_schema)
+    _bind_immutable_bundle_values(strict_schema, bundle)
     schema_bytes = json.dumps(
         strict_schema,
         ensure_ascii=False,
@@ -127,6 +128,44 @@ def make_openai_strict_schema(schema: dict[str, Any]) -> dict[str, Any]:
     if converted.get("type") != "object":
         raise ValueError("Structured output root schema must be an object")
     return converted
+
+
+def _bind_immutable_bundle_values(
+    schema: dict[str, Any],
+    bundle: StudyDraftRequestBundle,
+) -> None:
+    """Bind immutable source identity scalars to the exact request values.
+
+    This prevents a model from producing syntactically valid but unusable
+    run-local paths or source identifiers. Post-response bundle binding remains
+    the final integrity check for lists and other compound values.
+    """
+
+    defs = schema.get("$defs")
+    if not isinstance(defs, dict):
+        raise ValueError("Structured output schema has no $defs")
+
+    draft_source = defs.get("DraftSource")
+    if not isinstance(draft_source, dict):
+        raise ValueError("Structured output schema has no DraftSource definition")
+
+    properties = draft_source.get("properties")
+    if not isinstance(properties, dict):
+        raise ValueError("DraftSource schema has no properties")
+
+    exact_values = {
+        "source_sha256": bundle.source.source_sha256,
+        "source_snapshot_path": bundle.source.source_snapshot_path,
+        "run_id": bundle.source.run_id,
+        "handoff_path": bundle.source.handoff_path,
+        "canonical_source_path": bundle.source.canonical_source_path,
+        "problem_validation_path": bundle.source.problem_validation_path,
+    }
+    for field_name, value in exact_values.items():
+        field_schema = properties.get(field_name)
+        if not isinstance(field_schema, dict):
+            raise ValueError(f"DraftSource schema missing field: {field_name}")
+        field_schema["enum"] = [value]
 
 
 def _normalize_schema_node(node: Any) -> None:
