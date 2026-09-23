@@ -1,0 +1,141 @@
+from __future__ import annotations
+
+from enum import StrEnum
+from pathlib import Path
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+
+class PageMode(StrEnum):
+    NATIVE = "native"
+    HYBRID = "hybrid"
+    OCR_REQUIRED = "ocr_required"
+
+
+class TextLayerTrust(StrEnum):
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+
+class TextLayerOrigin(StrEnum):
+    BORN_DIGITAL_LIKELY = "born_digital_likely"
+    EMBEDDED_OCR_OR_CORRUPT_MAPPING_LIKELY = "embedded_ocr_or_corrupt_mapping_likely"
+    SCAN_LIKE = "scan_like"
+    UNKNOWN = "unknown"
+
+
+class BBox(BaseModel):
+    x0: float
+    y0: float
+    x1: float
+    y1: float
+
+
+class NativeSpan(BaseModel):
+    text: str
+    bbox: BBox
+    font: str | None = None
+    size: float | None = None
+    color: int | None = None
+
+
+class NativeChar(BaseModel):
+    index: int
+    char: str
+    bbox: BBox
+    block: int
+    line: int
+    span: int
+    char_in_span: int
+
+
+class PdfAnnotation(BaseModel):
+    xref: int
+    type_code: int
+    type_name: str
+    rect: BBox
+    colors: dict[str, Any] = Field(default_factory=dict)
+    opacity: float | None = None
+    content: str | None = None
+    vertices: list[tuple[float, float]] = Field(default_factory=list)
+    raw: dict[str, Any] = Field(default_factory=dict)
+
+
+class RawVectorDrawing(BaseModel):
+    drawing_index: int
+    rect: BBox
+    raw: dict[str, Any] = Field(default_factory=dict)
+
+
+class RawImageRegion(BaseModel):
+    image_index: int
+    bbox: BBox
+    xref: int | None = None
+    digest: str | None = None
+    raw: dict[str, Any] = Field(default_factory=dict)
+
+
+class VectorMark(BaseModel):
+    drawing_index: int
+    paint: str
+    kind: str
+    color_name: str | None = None
+    color_rgb: tuple[float, float, float] | None = None
+    rect: BBox
+    width: float | None = None
+    opacity: float | None = None
+    extracted_text: str | None = None
+    confidence: float = 0.0
+
+
+class SuspectRegion(BaseModel):
+    text: str
+    bbox: BBox
+    reason: str
+
+
+class PageInspection(BaseModel):
+    page_number: int
+    width: float
+    height: float
+    rotation: int = 0
+    native_text: str
+    native_char_count: int
+    native_quality_score: float
+    suspicious_char_count: int = 0
+    suspicious_token_count: int = 0
+    suspicious_char_ratio: float = 0.0
+    text_layer_trust: TextLayerTrust = TextLayerTrust.HIGH
+    text_layer_origin: TextLayerOrigin = TextLayerOrigin.UNKNOWN
+    suspect_native_regions: list[SuspectRegion] = Field(default_factory=list)
+    image_coverage: float
+    largest_image_coverage: float
+    drawing_count: int
+    annotation_count: int
+    mode: PageMode
+    ocr_recommended: bool
+    vision_review_recommended: bool
+    spans: list[NativeSpan] = Field(default_factory=list)
+    native_chars: list[NativeChar] = Field(default_factory=list)
+    raw_native: dict[str, Any] = Field(default_factory=dict)
+    annotations: list[PdfAnnotation] = Field(default_factory=list)
+    raw_vector_drawings: list[RawVectorDrawing] = Field(default_factory=list)
+    raw_image_regions: list[RawImageRegion] = Field(default_factory=list)
+    vector_marks: list[VectorMark] = Field(default_factory=list)
+    rendered_image: str | None = None
+    stable_page_id: str | None = None
+    base_content_hash: str | None = None
+    text_fingerprint: str | None = None
+    image_fingerprint: str | None = None
+    vector_fingerprint: str | None = None
+    annotation_fingerprint: str | None = None
+    reasons: list[str] = Field(default_factory=list)
+
+
+class DocumentInspection(BaseModel):
+    source_path: Path
+    sha256: str
+    page_count: int
+    pages: list[PageInspection]
