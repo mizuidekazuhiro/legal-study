@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from legal_study.study_draft import DraftSource
+from legal_study.supplemental_retrieval import SupplementalRetrievalBundle
 from legal_study.study_draft_request import (
     build_study_draft_request_bundle,
     required_instruction_names,
@@ -235,3 +236,25 @@ def test_instruction_selection_is_subject_specific() -> None:
 
     with pytest.raises(ValueError, match="No Anki subject instruction mapping"):
         required_instruction_names("unknown-subject")
+
+
+def test_supplemental_identity_must_match_request(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    instruction_dir = tmp_path / "instructions"
+    run_dir.mkdir()
+    _write_inputs(run_dir, instruction_dir)
+
+    supplemental = SupplementalRetrievalBundle(
+        subject="criminal",
+        question="different-question",
+    )
+
+    with pytest.raises(ValueError, match="Supplemental retrieval identity mismatch"):
+        build_study_draft_request_bundle(
+            subject="criminal",
+            question="22",
+            source=_source(),
+            run_dir=run_dir,
+            instruction_dir=instruction_dir,
+            supplemental=supplemental,
+        )
