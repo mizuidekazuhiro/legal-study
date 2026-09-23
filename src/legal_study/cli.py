@@ -11,6 +11,7 @@ from rich.console import Console
 from rich.table import Table
 
 from legal_study.automation.sync_stability import mark_question_sync_stable
+from legal_study.automation.file_watcher import iter_file_updates
 from legal_study.completion.done_marker import detect_done_markers, save_done_stamp
 from legal_study.completion.question_resolution import apply_done_markers
 from legal_study.finalize import finalize_existing_run
@@ -136,6 +137,34 @@ def apply_done(
             indent=2,
         )
     )
+
+
+@app.command("watch-file")
+def watch_file(
+    pdf: Annotated[Path, typer.Argument(exists=True, readable=True)],
+    poll_interval_seconds: Annotated[
+        float,
+        typer.Option(help="Seconds between cheap file metadata polls."),
+    ] = 2.0,
+) -> None:
+    """Watch a Drive-synced PDF and emit one JSON object for each detected update."""
+    console.print(
+        json.dumps(
+            {
+                "watching": str(pdf.expanduser().resolve()),
+                "poll_interval_seconds": poll_interval_seconds,
+            },
+            ensure_ascii=False,
+        )
+    )
+    try:
+        for event in iter_file_updates(
+            pdf,
+            poll_interval_seconds=poll_interval_seconds,
+        ):
+            console.print(event.model_dump_json())
+    except KeyboardInterrupt:
+        console.print("Stopped.")
 
 
 @app.command("check-sync-stable")
