@@ -105,14 +105,17 @@ def test_pipeline_routes_full_page_and_image_region_as_separate_evidence(
     assert inspection.pages[0].ocr_recommended is False
     assert inspection.pages[1].ocr_recommended is True
     assert payload["native_text_replaced"] is False
-    assert payload["pages"]["1"]["routing"] == {
-        "native_text_preserved": True,
-        "text_layer_trust": "high",
-        "text_layer_origin": "born_digital_likely",
-        "full_page_ocr": False,
-        "surgical_region_count": 0,
-        "image_region_count": 1,
-    }
+    page_one_routing = payload["pages"]["1"]["routing"]
+    assert page_one_routing["native_text_preserved"] is True
+    assert page_one_routing["text_layer_trust"] == "high"
+    assert page_one_routing["text_layer_origin"] == "born_digital_likely"
+    assert page_one_routing["full_page_ocr"] is False
+    assert page_one_routing["surgical_region_count"] == 0
+    assert page_one_routing["image_region_count"] == 1
+    assert page_one_routing["vision_review_recommended"] is False
+    assert page_one_routing["suppressed_target_count"] == 0
+    assert page_one_routing["suppressed_targets"] == []
+    assert page_one_routing["page_profile"]["raw_image_region_count"] == 1
     page_one_region = payload["pages"]["1"]["regions"][0]
     assert page_one_region["status"] == "completed"
     assert page_one_region["target"]["kind"] == "image_region"
