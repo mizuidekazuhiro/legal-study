@@ -9,6 +9,7 @@ from legal_study.page_identity import ensure_source_page_index
 from legal_study.pdf.pipeline import PdfIngestPipeline
 from legal_study.run_manifest import prepare_run
 from legal_study.settings import LocalSettings
+from legal_study.source_store import SourceSnapshot
 from legal_study.state import QuestionStateStore, QuestionStatus
 
 
@@ -32,7 +33,7 @@ def _resolve_stable_pages(
     stable_page_ids: list[str],
     source_sha256: str,
     settings: LocalSettings,
-    snapshot,
+    snapshot: SourceSnapshot,
 ) -> list[int]:
     if not stable_page_ids:
         raise RuntimeError("Work item has no stable_page_ids")
@@ -89,7 +90,6 @@ def process_next_work_item(
         reason="CLAIMED",
     )
 
-    transitioned_to_processing = False
     try:
         if item.source_snapshot is None:
             raise RuntimeError("Queued work item is missing immutable source snapshot")
@@ -111,7 +111,6 @@ def process_next_work_item(
                 item.question,
                 QuestionStatus.PROCESSING,
             )
-            transitioned_to_processing = True
         elif question.status != QuestionStatus.PROCESSING:
             raise RuntimeError(
                 "Question must be SYNC_STABLE or PROCESSING before queue work; "
