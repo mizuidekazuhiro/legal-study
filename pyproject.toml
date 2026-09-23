@@ -21,6 +21,9 @@ dependencies = [
 api = [
   "openai>=2.0.0",
 ]
+notion = [
+  "notion-client>=3.1.0,<4.0.0",
+]
 ocr = [
   "paddleocr>=3.7.0,<3.8.0",
   "paddlepaddle>=3.2.0,<3.3.0",
