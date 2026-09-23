@@ -10,8 +10,16 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from legal_study.io_utils import atomic_write_json
 from legal_study.openai_request import build_openai_responses_request_template
+from legal_study.problem_packet import handoff_markdown_filename
+from legal_study.run_manifest import RunManifest
+from legal_study.settings import LocalSettings
+from legal_study.state import QuestionStateStore
+from legal_study.study_draft import DraftSource
 from legal_study.study_draft_acceptance import accept_study_draft_response
-from legal_study.study_draft_request import StudyDraftRequestBundle
+from legal_study.study_draft_request import (
+    StudyDraftRequestBundle,
+    build_study_draft_request_bundle,
+)
 
 
 class StrictPocModel(BaseModel):
@@ -40,6 +48,63 @@ class OpenAIPocResult(StrictPocModel):
     acceptance_issue_codes: list[str] = Field(default_factory=list)
     usage: dict[str, int] = Field(default_factory=dict)
     receipt_path: str = "study_draft_api_receipt.json"
+
+
+
+def build_study_draft_bundle_from_run(
+    *,
+    run_dir: Path,
+    instruction_dir: Path,
+    settings: LocalSettings | None = None,
+) -> StudyDraftRequestBundle:
+    """Reconstruct the immutable LLM input bundle for one completed ingest run."""
+
+    root = run_dir.expanduser().resolve()
+    manifest_path = root / "run_manifest.json"
+    if not manifest_path.is_file():
+        raise FileNotFoundError(f"run_manifest.json not found: {root}")
+
+    manifest = RunManifest.model_validate_json(
+        manifest_path.read_text(encoding="utf-8")
+    )
+    if not manifest.requested_pages:
+        raise RuntimeError("Run manifest has no requested_pages")
+
+    cfg = settings or LocalSettings()
+    cfg.ensure()
+    question = QuestionStateStore(cfg.state_db).get(
+        manifest.subject,
+        manifest.question,
+    )
+    if question is None:
+        raise RuntimeError(
+            f"Question workflow state not found: {manifest.subject}/{manifest.question}"
+        )
+    if question.latest_source_sha256 != manifest.source.sha256:
+        raise RuntimeError("Question source SHA does not match run manifest")
+    if not question.stable_page_ids:
+        raise RuntimeError("Question workflow state has no stable_page_ids")
+
+    source = DraftSource(
+        source_sha256=manifest.source.sha256,
+        source_snapshot_path=str(manifest.source.snapshot_path),
+        stable_page_ids=question.stable_page_ids,
+        requested_pages=manifest.requested_pages,
+        run_id=manifest.run_id,
+        handoff_path=handoff_markdown_filename(
+            manifest.subject,
+            manifest.question,
+        ),
+        canonical_source_path="canonical_source.json",
+        problem_validation_path="problem_validation.json",
+    )
+    return build_study_draft_request_bundle(
+        subject=manifest.subject,
+        question=manifest.question,
+        source=source,
+        run_dir=root,
+        instruction_dir=instruction_dir,
+    )
 
 
 def run_openai_study_draft_poc(
