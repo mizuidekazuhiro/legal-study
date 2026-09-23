@@ -285,3 +285,58 @@ def test_problem_packet_must_have_passed_validation(tmp_path: Path) -> None:
 
     assert result.valid is False
     assert "PROBLEM_PACKET_NOT_VALID" in {issue.code for issue in result.issues}
+
+
+def test_mirrored_review_issue_reuses_original_evidence_provenance(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_run(run_dir)
+
+    canonical_path = run_dir / "canonical_source.json"
+    canonical = json.loads(canonical_path.read_text(encoding="utf-8"))
+    canonical["logical_markers"] = [
+        {
+            "id": "p0110-logical-mark-001",
+            "page_number": 110,
+            "review_status": "NEEDS_REVIEW",
+        }
+    ]
+    canonical["needs_review"][0]["issues"] = [
+        {
+            "id": "p0110-logical-mark-001",
+            "page_number": 110,
+            "status": "NEEDS_REVIEW",
+            "review_category": "visual_markup_page",
+        }
+    ]
+    canonical_path.write_text(
+        json.dumps(canonical, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    payload = _payload()
+    payload["unresolved"] = [
+        {
+            "code": "MARKER_REVIEW",
+            "message": "マーカー境界の視覚確認が必要。",
+            "evidence_refs": [
+                {
+                    "evidence_id": "p0110-logical-mark-001",
+                    "page_number": 110,
+                    "source_kind": "logical_marker",
+                    "artifact_path": "canonical_source.json",
+                    "source_anchor": None,
+                    "review_required": True,
+                }
+            ],
+            "blocking": True,
+        }
+    ]
+    draft = StudyDraft.model_validate(payload)
+
+    result = validate_study_draft_evidence(draft=draft, run_dir=run_dir)
+
+    assert result.valid is True
+    assert result.issues == []
