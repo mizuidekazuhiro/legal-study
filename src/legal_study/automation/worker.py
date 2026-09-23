@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from pydantic import BaseModel, Field
 
 from legal_study.automation.queue import AutomationStateStore, WorkStatus
+from legal_study.chat_bridge_publish import publish_run_to_bridge
 from legal_study.page_identity import ensure_source_page_index
 from legal_study.pdf.pipeline import PdfIngestPipeline
 from legal_study.run_manifest import prepare_run
@@ -22,6 +25,8 @@ class QueueWorkerResult(BaseModel):
     question_status: QuestionStatus | None = None
     output_dir: str | None = None
     run_id: str | None = None
+    chat_packet_status: str | None = None
+    chat_packet_path: str | None = None
     reason: str
     error: str | None = None
 
@@ -59,6 +64,7 @@ def process_next_work_item(
     *,
     pipeline: PdfIngestPipeline,
     settings: LocalSettings | None = None,
+    bridge_root: Path | None = None,
 ) -> QueueWorkerResult:
     """Claim and process exactly one queued question.
 
@@ -138,6 +144,14 @@ def process_next_work_item(
             pages=pages,
         )
 
+        if bridge_root is not None:
+            published = publish_run_to_bridge(
+                run_dir=prepared.output_dir,
+                bridge_root=bridge_root,
+            )
+            result.chat_packet_status = published.status
+            result.chat_packet_path = published.packet_path
+
         completed = queue.mark_completed(
             item.id,
             output_dir=prepared.output_dir,
@@ -175,11 +189,16 @@ def drain_pending_work(
     *,
     pipeline: PdfIngestPipeline,
     settings: LocalSettings | None = None,
+    bridge_root: Path | None = None,
 ) -> list[QueueWorkerResult]:
     """Process queued work serially until no PENDING item remains."""
     results: list[QueueWorkerResult] = []
     while True:
-        result = process_next_work_item(pipeline=pipeline, settings=settings)
+        result = process_next_work_item(
+            pipeline=pipeline,
+            settings=settings,
+            bridge_root=bridge_root,
+        )
         if not result.claimed:
             break
         results.append(result)
