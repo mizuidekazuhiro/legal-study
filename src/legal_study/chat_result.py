@@ -43,7 +43,7 @@ class ChatObsidianNote(StrictChatResultModel):
     markdown: str = Field(min_length=1)
 
     @model_validator(mode="after")
-    def validate_path(self) -> "ChatObsidianNote":
+    def validate_path(self) -> ChatObsidianNote:
         cleaned = self.relative_path.strip()
         path = Path(cleaned)
         if (
@@ -133,16 +133,18 @@ def validate_chat_result(
         ):
             if "<br>" not in value:
                 issues.append(f"ANKI_HTML_BREAK_MISSING:{index}:{field_name}")
-        if card.scope == "common_rule":
-            if not card.extra or "<br>" not in card.extra:
-                issues.append(f"ANKI_COMMON_EXTRA_INVALID:{index}")
+        if card.scope == "common_rule" and (
+            not card.extra or "<br>" not in card.extra
+        ):
+            issues.append(f"ANKI_COMMON_EXTRA_INVALID:{index}")
 
     problem_cards = [card for card in result.anki_cards if card.scope == "problem"]
     common_cards = [card for card in result.anki_cards if card.scope == "common_rule"]
 
-    if problem_cards:
-        if not result.problem_card_extra or "<br>" not in result.problem_card_extra:
-            issues.append("PROBLEM_CARD_EXTRA_MISSING")
+    if problem_cards and (
+        not result.problem_card_extra or "<br>" not in result.problem_card_extra
+    ):
+        issues.append("PROBLEM_CARD_EXTRA_MISSING")
 
     if manifest.subject == "criminal":
         if not any(
