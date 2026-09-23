@@ -266,6 +266,8 @@ def test_one_question_poc_calls_responses_once_and_accepts_candidate(tmp_path: P
     assert result.response_status == "completed"
     assert result.accepted is True
     assert result.study_draft_path == "study_draft.json"
+    assert result.raw_response_path == "study_draft_api_raw_response.json"
+    assert result.acceptance_issues == []
     assert len(client.responses.calls) == 1
 
     request = client.responses.calls[0]
@@ -282,6 +284,9 @@ def test_one_question_poc_calls_responses_once_and_accepts_candidate(tmp_path: P
     assert receipt["response_id"] == "resp_test_123"
     assert receipt["accepted"] is True
     assert receipt["usage"]["total_tokens"] == 1801
+    assert receipt["raw_response_path"] == "study_draft_api_raw_response.json"
+    assert receipt["acceptance_issues"] == []
+    assert (run_dir / "study_draft_api_raw_response.json").is_file()
 
 
 def test_incomplete_response_is_rejected_without_study_draft(tmp_path: Path) -> None:
@@ -326,7 +331,8 @@ def test_refusal_is_rejected_without_study_draft(tmp_path: Path) -> None:
 
 def test_invalid_model_output_flows_through_acceptance_gate(tmp_path: Path) -> None:
     run_dir, bundle = _bundle(tmp_path)
-    client = FakeClient(_response(output_text='{"not":"study-draft"}'))
+    raw_output = '{"not":"study-draft"}'
+    client = FakeClient(_response(output_text=raw_output))
 
     result = run_openai_study_draft_poc(
         bundle=bundle,
@@ -337,6 +343,21 @@ def test_invalid_model_output_flows_through_acceptance_gate(tmp_path: Path) -> N
     assert result.accepted is False
     assert result.reason == "DRAFT_REJECTED"
     assert "SCHEMA_VALIDATION_FAILED" in result.acceptance_issue_codes
+    assert result.raw_response_path == "study_draft_api_raw_response.json"
+    assert len(result.acceptance_issues) == 1
+    assert result.acceptance_issues[0].code == "SCHEMA_VALIDATION_FAILED"
+    assert "schema_version" in result.acceptance_issues[0].message
+    assert (run_dir / "study_draft_api_raw_response.json").read_text(
+        encoding="utf-8"
+    ) == raw_output
+
+    receipt = json.loads(
+        (run_dir / "study_draft_api_receipt.json").read_text(encoding="utf-8")
+    )
+    assert receipt["raw_response_path"] == "study_draft_api_raw_response.json"
+    assert receipt["acceptance_issues"][0]["code"] == "SCHEMA_VALIDATION_FAILED"
+    assert "schema_version" in receipt["acceptance_issues"][0]["message"]
+    assert receipt["acceptance_issues"][0]["location"] is None
     assert not (run_dir / "study_draft.json").exists()
 
 
