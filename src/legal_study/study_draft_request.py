@@ -1,0 +1,280 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import mimetypes
+from pathlib import Path
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from legal_study.study_draft import DraftSource, study_draft_json_schema
+
+
+class StrictBundleModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class BundleTextDocument(StrictBundleModel):
+    kind: Literal["handoff", "instruction"]
+    name: str = Field(min_length=1)
+    path: str = Field(min_length=1)
+    sha256: str = Field(min_length=64, max_length=64)
+    text: str = Field(min_length=1)
+
+
+class BundleReviewImage(StrictBundleModel):
+    page_number: int = Field(ge=1)
+    path: str = Field(min_length=1)
+    sha256: str = Field(min_length=64, max_length=64)
+    mime_type: str = Field(min_length=1)
+
+
+class StudyDraftRequestBundle(StrictBundleModel):
+    schema_version: Literal["study_draft_request.v1"] = "study_draft_request.v1"
+    subject: str = Field(min_length=1)
+    question: str = Field(min_length=1)
+    source: DraftSource
+    handoff: BundleTextDocument
+    instructions: list[BundleTextDocument] = Field(min_length=1)
+    review_sheets: list[BundleReviewImage] = Field(default_factory=list)
+    response_schema: dict[str, Any]
+    response_schema_sha256: str = Field(min_length=64, max_length=64)
+    output_filename: Literal["study_draft.json"] = "study_draft.json"
+
+
+_SUBJECT_ANKI_INSTRUCTION = {
+    "administrative": "20_行政法_Ankiカード作成仕様_科目別特則.md",
+    "constitutional": "21_憲法_Ankiカード作成仕様_科目別特則.md",
+    "criminal": "22_刑法_Ankiカード作成仕様_科目別特則.md",
+}
+
+
+def required_instruction_names(
+    subject: str,
+    *,
+    include_anki: bool = True,
+    include_obsidian: bool = True,
+) -> list[str]:
+    """Return the instruction documents required for one draft-generation request."""
+
+    names = [
+        "00_論文作成・登録_本番_プロジェクト指示.md",
+        "01_論文作成_共通原則_原文・赤字・資料確認.md",
+    ]
+    if include_anki:
+        names.append("10_Ankiカード作成仕様_共通.md")
+        subject_rule = _SUBJECT_ANKI_INSTRUCTION.get(subject)
+        if subject_rule is None:
+            raise ValueError(f"No Anki subject instruction mapping for subject: {subject}")
+        names.append(subject_rule)
+    if include_obsidian:
+        names.extend(
+            [
+                "30_Obsidianノート作成仕様_共通.md",
+                "31_Obsidian_Vault直接更新仕様.md",
+            ]
+        )
+    return names
+
+
+def build_study_draft_request_bundle(
+    *,
+    subject: str,
+    question: str,
+    source: DraftSource,
+    run_dir: Path,
+    instruction_dir: Path,
+    include_anki: bool = True,
+    include_obsidian: bool = True,
+) -> StudyDraftRequestBundle:
+    """Build the deterministic, API-independent input bundle for one study draft.
+
+    This function reads files only. It does not call OpenAI, modify queue state,
+    create Anki/Obsidian outputs, or register anything in Notion.
+    """
+
+    root = run_dir.resolve()
+    instruction_root = instruction_dir.resolve()
+
+    if subject != source_subject_hint(subject):
+        raise ValueError("Subject normalization failed")
+    if not source.run_id.strip():
+        raise ValueError("source.run_id must not be empty")
+
+    handoff_path = _resolve_inside(root, source.handoff_path)
+    handoff = _read_text_document(
+        kind="handoff",
+        name=handoff_path.name,
+        path=source.handoff_path,
+        absolute_path=handoff_path,
+    )
+
+    instruction_names = required_instruction_names(
+        subject,
+        include_anki=include_anki,
+        include_obsidian=include_obsidian,
+    )
+    instructions: list[BundleTextDocument] = []
+    for name in instruction_names:
+        absolute_path = _resolve_inside(instruction_root, name)
+        instructions.append(
+            _read_text_document(
+                kind="instruction",
+                name=name,
+                path=name,
+                absolute_path=absolute_path,
+            )
+        )
+
+    canonical_path = _resolve_inside(root, source.canonical_source_path)
+    canonical = _read_json_object(canonical_path)
+    _validate_bundle_source_identity(
+        subject=subject,
+        question=question,
+        source=source,
+        canonical=canonical,
+    )
+
+    sheets = canonical.get("handoff_review_sheets", {})
+    if not isinstance(sheets, dict):
+        raise ValueError("canonical_source.json handoff_review_sheets must be an object")
+
+    review_sheets: list[BundleReviewImage] = []
+    for page_key, relative_path in sorted(
+        sheets.items(),
+        key=lambda item: int(item[0]),
+    ):
+        page_number = int(page_key)
+        if page_number not in source.requested_pages:
+            raise ValueError(
+                f"Review sheet page {page_number} is outside requested_pages"
+            )
+        if not isinstance(relative_path, str):
+            raise ValueError("Review sheet path must be a string")
+        image_path = _resolve_inside(root, relative_path)
+        if not image_path.is_file():
+            raise FileNotFoundError(f"Review sheet is missing: {relative_path}")
+        mime_type, _ = mimetypes.guess_type(image_path.name)
+        if mime_type not in {"image/png", "image/jpeg", "image/webp"}:
+            raise ValueError(
+                f"Unsupported review sheet media type: {relative_path} -> {mime_type}"
+            )
+        review_sheets.append(
+            BundleReviewImage(
+                page_number=page_number,
+                path=Path(relative_path).as_posix(),
+                sha256=_sha256_file(image_path),
+                mime_type=mime_type,
+            )
+        )
+
+    schema = study_draft_json_schema()
+    schema_bytes = json.dumps(
+        schema,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+    return StudyDraftRequestBundle(
+        subject=subject,
+        question=question,
+        source=source,
+        handoff=handoff,
+        instructions=instructions,
+        review_sheets=review_sheets,
+        response_schema=schema,
+        response_schema_sha256=hashlib.sha256(schema_bytes).hexdigest(),
+    )
+
+
+def source_subject_hint(subject: str) -> str:
+    cleaned = subject.strip()
+    if not cleaned:
+        raise ValueError("subject must not be empty")
+    return cleaned
+
+
+def _resolve_inside(root: Path, relative: str) -> Path:
+    path = Path(relative)
+    if path.is_absolute() or ".." in path.parts:
+        raise ValueError(f"Path escapes configured root: {relative}")
+    resolved = (root / path).resolve()
+    if not resolved.is_relative_to(root):
+        raise ValueError(f"Path escapes configured root: {relative}")
+    return resolved
+
+
+def _read_text_document(
+    *,
+    kind: Literal["handoff", "instruction"],
+    name: str,
+    path: str,
+    absolute_path: Path,
+) -> BundleTextDocument:
+    if not absolute_path.is_file():
+        raise FileNotFoundError(f"Required {kind} file is missing: {path}")
+    payload = absolute_path.read_bytes()
+    try:
+        text = payload.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"Required {kind} file is not UTF-8: {path}") from exc
+    if not text.strip():
+        raise ValueError(f"Required {kind} file is empty: {path}")
+    return BundleTextDocument(
+        kind=kind,
+        name=name,
+        path=Path(path).as_posix(),
+        sha256=hashlib.sha256(payload).hexdigest(),
+        text=text,
+    )
+
+
+def _read_json_object(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        raise FileNotFoundError(f"Required JSON artifact is missing: {path.name}")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid JSON artifact: {path.name}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"JSON artifact must contain an object: {path.name}")
+    return payload
+
+
+def _validate_bundle_source_identity(
+    *,
+    subject: str,
+    question: str,
+    source: DraftSource,
+    canonical: dict[str, Any],
+) -> None:
+    canonical_source = canonical.get("source")
+    if not isinstance(canonical_source, dict):
+        raise ValueError("canonical_source.json has no source object")
+
+    comparisons = {
+        "subject": (canonical.get("subject"), subject),
+        "question": (canonical.get("question"), question),
+        "source_sha256": (canonical_source.get("sha256"), source.source_sha256),
+        "requested_pages": (
+            canonical_source.get("requested_pages"),
+            source.requested_pages,
+        ),
+    }
+    mismatches = [
+        f"{key}: canonical={actual!r}, bundle={expected!r}"
+        for key, (actual, expected) in comparisons.items()
+        if actual != expected
+    ]
+    if mismatches:
+        raise ValueError("Bundle source identity mismatch: " + "; ".join(mismatches))
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
