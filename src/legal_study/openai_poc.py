@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from legal_study.io_utils import atomic_write_json
 from legal_study.openai_request import build_openai_responses_request_template
@@ -14,7 +14,7 @@ from legal_study.problem_packet import handoff_markdown_filename
 from legal_study.run_manifest import RunManifest
 from legal_study.settings import LocalSettings
 from legal_study.state import QuestionStateStore
-from legal_study.study_draft import DraftSource
+from legal_study.study_draft import DraftSource, StudyDraft
 from legal_study.study_draft_acceptance import accept_study_draft_response
 from legal_study.study_draft_request import (
     StudyDraftRequestBundle,
@@ -261,6 +261,33 @@ def run_openai_study_draft_poc(
         )
         return result
 
+    binding_issue_codes = _bundle_binding_issue_codes(
+        output_text=output_text,
+        bundle=bundle,
+    )
+    if binding_issue_codes:
+        result = OpenAIPocResult(
+            called=True,
+            response_id=response_id,
+            response_status=response_status,
+            response_model=response_model,
+            accepted=False,
+            reason="DRAFT_BUNDLE_MISMATCH",
+            acceptance_issue_codes=binding_issue_codes,
+            usage=usage,
+        )
+        _write_final_receipt(
+            receipt_path=receipt_path,
+            started_at=started_at,
+            request_hash=request_hash,
+            config=cfg,
+            result=result,
+            output_text_sha256=hashlib.sha256(
+                output_text.encode("utf-8")
+            ).hexdigest(),
+        )
+        return result
+
     acceptance = accept_study_draft_response(
         raw_response_text=output_text,
         run_dir=root,
@@ -287,6 +314,48 @@ def run_openai_study_draft_poc(
         output_text_sha256=hashlib.sha256(output_text.encode("utf-8")).hexdigest(),
     )
     return result
+
+
+def _bundle_binding_issue_codes(
+    *,
+    output_text: str,
+    bundle: StudyDraftRequestBundle,
+) -> list[str]:
+    try:
+        draft = StudyDraft.model_validate_json(output_text)
+    except ValidationError:
+        return []
+
+    issues: list[str] = []
+    if draft.subject != bundle.subject or draft.question != bundle.question:
+        issues.append("BUNDLE_IDENTITY_MISMATCH")
+
+    if draft.source.model_dump(mode="json") != bundle.source.model_dump(mode="json"):
+        issues.append("BUNDLE_SOURCE_MISMATCH")
+
+    expected_instructions = [
+        {"name": item.name, "sha256": item.sha256}
+        for item in bundle.instructions
+    ]
+    actual_instructions = [
+        item.model_dump(mode="json")
+        for item in draft.instruction_sources
+    ]
+    if actual_instructions != expected_instructions:
+        issues.append("BUNDLE_INSTRUCTION_SOURCES_MISMATCH")
+
+    expected_reviews = [
+        (item.page_number, item.path)
+        for item in bundle.review_sheets
+    ]
+    actual_reviews = [
+        (item.page_number, item.review_sheet_path)
+        for item in draft.visual_reviews
+    ]
+    if actual_reviews != expected_reviews:
+        issues.append("BUNDLE_REVIEW_SHEETS_MISMATCH")
+
+    return issues
 
 
 def _default_openai_client() -> Any:
