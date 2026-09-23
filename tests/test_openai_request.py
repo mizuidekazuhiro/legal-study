@@ -9,16 +9,16 @@ from legal_study.openai_request import (
     make_openai_strict_schema,
 )
 from legal_study.study_draft import DraftSource
+from legal_study.study_draft_request import (
+    build_study_draft_request_bundle,
+    required_instruction_names,
+)
 from legal_study.supplemental_retrieval import (
     NotionStatuteRecord,
     ObsidianArgumentPattern,
     SupplementalRetrievalBundle,
     SupplementalSearchAttempt,
     sha256_text,
-)
-from legal_study.study_draft_request import (
-    build_study_draft_request_bundle,
-    required_instruction_names,
 )
 
 
