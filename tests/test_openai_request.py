@@ -161,6 +161,10 @@ def test_request_template_matches_responses_multimodal_shape(tmp_path: Path) -> 
     assert "EvidenceRef.review_required and DraftText.review_required" in content[0]["text"]
     assert "It does NOT by itself require DraftText.review_required=true" in content[0]["text"]
     assert "Do not propagate the evidence provenance flag mechanically" in content[0]["text"]
+    assert "## Criminal-law Anki completeness contract" in content[0]["text"]
+    assert "Do not stop at the L4 whole-problem card" in content[0]["text"]
+    assert "There is no fixed target, standard, or maximum card count" in content[0]["text"]
+    assert "Notion registration, publication, or duplicate checking" in content[0]["text"]
 
     image = content[1]
     assert image["type"] == "input_image"
