@@ -321,6 +321,97 @@ def _render_user_input(bundle: StudyDraftRequestBundle) -> str:
     else:
         lines.extend(["", "## Attached visual review sheets", "", "- none"])
 
+    supplemental = bundle.supplemental
+    if supplemental is not None:
+        lines.extend(
+            [
+                "",
+                "## Supplemental retrieval",
+                "",
+                (
+                    "For criminal-law common-rule retrieval, use the registered "
+                    "Obsidian argument-pattern records below. Do not require or "
+                    "request the 論文ナビゲートテキスト PDF for this request. "
+                    "For statute text, use the Notion statute records below."
+                ),
+                "",
+                "### Search attempts",
+                "",
+            ]
+        )
+        if supplemental.search_attempts:
+            for attempt in supplemental.search_attempts:
+                lines.append(
+                    f"- {attempt.source} | query={attempt.query} | "
+                    f"matched_ids={json.dumps(attempt.matched_ids, ensure_ascii=False)}"
+                )
+        else:
+            lines.append("- none")
+
+        lines.extend(["", "### Obsidian argument patterns", ""])
+        if supplemental.argument_patterns:
+            for pattern in supplemental.argument_patterns:
+                lines.extend(
+                    [
+                        (
+                            f"===== BEGIN OBSIDIAN ARGUMENT PATTERN "
+                            f"{pattern.pattern_id} ====="
+                        ),
+                        f"title: {pattern.title}",
+                        f"aliases: {json.dumps(pattern.aliases, ensure_ascii=False)}",
+                        (
+                            "related_statutes: "
+                            f"{json.dumps(pattern.related_statutes, ensure_ascii=False)}"
+                        ),
+                        f"source_path: {pattern.source_path}",
+                        f"source_sha256: {pattern.source_sha256}",
+                        "",
+                        pattern.body.rstrip(),
+                        (
+                            f"===== END OBSIDIAN ARGUMENT PATTERN "
+                            f"{pattern.pattern_id} ====="
+                        ),
+                        "",
+                    ]
+                )
+        else:
+            lines.append("- none")
+
+        lines.extend(["", "### Notion statute records", ""])
+        if supplemental.statutes:
+            for statute in supplemental.statutes:
+                lines.extend(
+                    [
+                        f"===== BEGIN NOTION STATUTE {statute.record_id} =====",
+                        f"law_name: {statute.law_name}",
+                        f"article: {statute.article}",
+                        f"notion_url: {statute.notion_url}",
+                        f"last_edited_time: {statute.last_edited_time}",
+                        "",
+                        statute.text.rstrip(),
+                        f"===== END NOTION STATUTE {statute.record_id} =====",
+                        "",
+                    ]
+                )
+        else:
+            lines.append("- none")
+
+        lines.extend(["", "### Existing Obsidian problem notes", ""])
+        if supplemental.existing_problem_notes:
+            for note in supplemental.existing_problem_notes:
+                lines.extend(
+                    [
+                        f"===== BEGIN EXISTING PROBLEM NOTE {note.relative_path} =====",
+                        f"source_sha256: {note.source_sha256}",
+                        "",
+                        note.text.rstrip(),
+                        f"===== END EXISTING PROBLEM NOTE {note.relative_path} =====",
+                        "",
+                    ]
+                )
+        else:
+            lines.append("- none")
+
     lines.extend(
         [
             "",
