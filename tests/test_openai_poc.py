@@ -346,7 +346,7 @@ def test_invalid_model_output_flows_through_acceptance_gate(tmp_path: Path) -> N
     assert result.raw_response_path == "study_draft_api_raw_response.json"
     assert len(result.acceptance_issues) == 1
     assert result.acceptance_issues[0].code == "SCHEMA_VALIDATION_FAILED"
-    assert "schema_version" in result.acceptance_issues[0].message
+    assert "subject" in result.acceptance_issues[0].message
     assert (run_dir / "study_draft_api_raw_response.json").read_text(
         encoding="utf-8"
     ) == raw_output
@@ -356,7 +356,7 @@ def test_invalid_model_output_flows_through_acceptance_gate(tmp_path: Path) -> N
     )
     assert receipt["raw_response_path"] == "study_draft_api_raw_response.json"
     assert receipt["acceptance_issues"][0]["code"] == "SCHEMA_VALIDATION_FAILED"
-    assert "schema_version" in receipt["acceptance_issues"][0]["message"]
+    assert "subject" in receipt["acceptance_issues"][0]["message"]
     assert receipt["acceptance_issues"][0]["location"] is None
     assert not (run_dir / "study_draft.json").exists()
 
