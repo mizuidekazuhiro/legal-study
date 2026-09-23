@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import sqlite3
 import time
 from collections.abc import Callable, Iterator
@@ -69,11 +68,13 @@ class BridgeCommand(StrictBridgeModel):
 
     @model_validator(mode="after")
     def validate_notion_authorization(self) -> BridgeCommand:
-        if self.action in {BridgeAction.REGISTER_NOTION, BridgeAction.APPLY_ALL}:
-            if not self.notion_registration_authorized:
-                raise ValueError(
-                    "Notion actions require notion_registration_authorized=true"
-                )
+        if (
+            self.action in {BridgeAction.REGISTER_NOTION, BridgeAction.APPLY_ALL}
+            and not self.notion_registration_authorized
+        ):
+            raise ValueError(
+                "Notion actions require notion_registration_authorized=true"
+            )
         return self
 
 
@@ -424,7 +425,7 @@ def process_bridge_command(
             status="SUCCESS",
             receipt_path=str(receipt_path),
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 -- worker boundary must receipt all failures
         receipt = BridgeReceipt(
             command_id=command.command_id,
             status="failed",
