@@ -275,6 +275,27 @@ def _render_user_input(bundle: StudyDraftRequestBundle) -> str:
             "- Do not invent evidence IDs. If evidence is insufficient or "
             "unreadable, record the uncertainty instead of guessing."
         ),
+        (
+            "- IMPORTANT: EvidenceRef.review_required and DraftText.review_required "
+            "have different meanings. EvidenceRef.review_required is immutable "
+            "provenance copied exactly from the Allowed evidence references and "
+            "records that the source evidence required visual review at input time. "
+            "It does NOT by itself require DraftText.review_required=true."
+        ),
+        (
+            "- DraftText.review_required describes the state AFTER you perform the "
+            "attached visual review. Set DraftText.review_required=false when all "
+            "source evidence needed for that text has been checked against the "
+            "attached review sheets and no unresolved ambiguity remains. Set it true "
+            "only when that specific draft text still genuinely requires further "
+            "human/source review after your visual inspection."
+        ),
+        (
+            "- Therefore, a DraftText may correctly have review_required=false while "
+            "one or more of its EvidenceRef entries retain review_required=true. "
+            "Do not propagate the evidence provenance flag mechanically into the "
+            "DraftText flag."
+        ),
         "",
         "### Allowed evidence references",
         "",
