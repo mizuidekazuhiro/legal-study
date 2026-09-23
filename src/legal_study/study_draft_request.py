@@ -102,13 +102,14 @@ def build_study_draft_request_bundle(
     root = run_dir.resolve()
     instruction_root = instruction_dir.resolve()
 
-    if supplemental is not None:
-        if supplemental.subject != subject or supplemental.question != question:
-            raise ValueError(
-                "Supplemental retrieval identity mismatch: "
-                f"supplemental=({supplemental.subject!r}, {supplemental.question!r}), "
-                f"request=({subject!r}, {question!r})"
-            )
+    if supplemental is not None and (
+        supplemental.subject != subject or supplemental.question != question
+    ):
+        raise ValueError(
+            "Supplemental retrieval identity mismatch: "
+            f"supplemental=({supplemental.subject!r}, {supplemental.question!r}), "
+            f"request=({subject!r}, {question!r})"
+        )
 
     if subject != source_subject_hint(subject):
         raise ValueError("Subject normalization failed")
