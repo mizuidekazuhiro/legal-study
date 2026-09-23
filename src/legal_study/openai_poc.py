@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -34,8 +35,11 @@ class OpenAIPocConfig(StrictPocModel):
     reasoning_effort: Literal["none", "low", "medium", "high", "xhigh", "max"] = "high"
     reasoning_mode: Literal["standard", "pro"] = "standard"
     store: Literal[False] = False
+    background: Literal[True] = True
     max_output_tokens: int = Field(default=64000, ge=1024, le=128000)
     image_detail: Literal["low", "high", "original", "auto"] = "original"
+    poll_interval_seconds: float = Field(default=5.0, ge=0.1, le=60.0)
+    poll_timeout_seconds: float = Field(default=3600.0, ge=30.0, le=7200.0)
 
 
 class OpenAIPocAcceptanceIssue(StrictPocModel):
@@ -157,6 +161,7 @@ def run_openai_study_draft_poc(
                 "mode": cfg.reasoning_mode,
             },
             "store": cfg.store,
+            "background": cfg.background,
             "max_output_tokens": cfg.max_output_tokens,
         }
     )
@@ -173,6 +178,7 @@ def run_openai_study_draft_poc(
             "model_requested": cfg.model,
             "reasoning": request_payload["reasoning"],
             "store": cfg.store,
+            "background": cfg.background,
             "max_output_tokens": cfg.max_output_tokens,
             "image_detail": cfg.image_detail,
             "accepted": False,
@@ -196,6 +202,7 @@ def run_openai_study_draft_poc(
                 "model_requested": cfg.model,
                 "reasoning": request_payload["reasoning"],
                 "store": cfg.store,
+                "background": cfg.background,
                 "max_output_tokens": cfg.max_output_tokens,
                 "image_detail": cfg.image_detail,
                 "accepted": False,
@@ -204,6 +211,83 @@ def run_openai_study_draft_poc(
             },
         )
         raise
+
+    response_id = _string_attr(response, "id")
+    response_status = _string_attr(response, "status")
+    if response_id and response_status in {"queued", "in_progress"}:
+        atomic_write_json(
+            receipt_path,
+            {
+                "schema_version": "study_draft_api_receipt.v1",
+                "state": "IN_PROGRESS",
+                "started_at": started_at,
+                "request_sha256": request_hash,
+                "model_requested": cfg.model,
+                "reasoning": request_payload["reasoning"],
+                "store": cfg.store,
+                "background": cfg.background,
+                "max_output_tokens": cfg.max_output_tokens,
+                "image_detail": cfg.image_detail,
+                "response_id": response_id,
+                "response_status": response_status,
+                "accepted": False,
+                "reason": "BACKGROUND_IN_PROGRESS",
+            },
+        )
+        poll_started = time.monotonic()
+        while response_status in {"queued", "in_progress"}:
+            if time.monotonic() - poll_started > cfg.poll_timeout_seconds:
+                atomic_write_json(
+                    receipt_path,
+                    {
+                        "schema_version": "study_draft_api_receipt.v1",
+                        "state": "POLL_TIMEOUT",
+                        "started_at": started_at,
+                        "finished_at": datetime.now(UTC).isoformat(),
+                        "request_sha256": request_hash,
+                        "model_requested": cfg.model,
+                        "reasoning": request_payload["reasoning"],
+                        "store": cfg.store,
+                        "background": cfg.background,
+                        "max_output_tokens": cfg.max_output_tokens,
+                        "image_detail": cfg.image_detail,
+                        "response_id": response_id,
+                        "response_status": response_status,
+                        "accepted": False,
+                        "reason": "BACKGROUND_POLL_TIMEOUT",
+                    },
+                )
+                raise TimeoutError(
+                    "Background response polling timed out; "
+                    f"response_id={response_id}"
+                )
+            time.sleep(cfg.poll_interval_seconds)
+            try:
+                response = api_client.responses.retrieve(response_id)
+            except Exception as exc:
+                atomic_write_json(
+                    receipt_path,
+                    {
+                        "schema_version": "study_draft_api_receipt.v1",
+                        "state": "POLL_FAILED",
+                        "started_at": started_at,
+                        "finished_at": datetime.now(UTC).isoformat(),
+                        "request_sha256": request_hash,
+                        "model_requested": cfg.model,
+                        "reasoning": request_payload["reasoning"],
+                        "store": cfg.store,
+                        "background": cfg.background,
+                        "max_output_tokens": cfg.max_output_tokens,
+                        "image_detail": cfg.image_detail,
+                        "response_id": response_id,
+                        "response_status": response_status,
+                        "accepted": False,
+                        "reason": "BACKGROUND_POLL_FAILED",
+                        "error": repr(exc),
+                    },
+                )
+                raise
+            response_status = _string_attr(response, "status")
 
     response_id = _string_attr(response, "id")
     response_status = _string_attr(response, "status")
@@ -425,7 +509,7 @@ def _default_openai_client() -> Any:
         raise RuntimeError(
             "OpenAI SDK is not installed; install the optional API dependency"
         ) from exc
-    return OpenAI()
+    return OpenAI(timeout=60.0, max_retries=0)
 
 
 def _request_sha256(payload: dict[str, Any]) -> str:
@@ -494,6 +578,7 @@ def _write_final_receipt(
             "mode": config.reasoning_mode,
         },
         "store": config.store,
+        "background": config.background,
         "max_output_tokens": config.max_output_tokens,
         "image_detail": config.image_detail,
         "response_id": result.response_id,
