@@ -42,7 +42,7 @@ class BundleLogicalMarker(StrictBundleModel):
     boundary_confidence: float | None = None
     review_status: str = Field(min_length=1)
     reason: str | None = None
-    evidence_image: str = Field(min_length=1)
+    evidence_image: str | None = Field(default=None, min_length=1)
 
 
 class StudyDraftRequestBundle(StrictBundleModel):
@@ -276,8 +276,12 @@ def _read_logical_markers(
             raise ValueError(f"Logical marker {marker_id} has reversed char bounds")
         if not isinstance(review_status, str) or not review_status.strip():
             raise ValueError(f"Logical marker {marker_id} review_status is missing")
-        if not isinstance(evidence_image, str) or not evidence_image.strip():
-            raise ValueError(f"Logical marker {marker_id} evidence_image is missing")
+        if evidence_image is not None and (
+            not isinstance(evidence_image, str) or not evidence_image.strip()
+        ):
+            raise TypeError(
+                f"Logical marker {marker_id} evidence_image must be a non-empty string"
+            )
 
         boundary_confidence = item.get("boundary_confidence")
         if boundary_confidence is not None and not isinstance(
@@ -305,7 +309,11 @@ def _read_logical_markers(
                 ),
                 review_status=review_status,
                 reason=reason,
-                evidence_image=Path(evidence_image).as_posix(),
+                evidence_image=(
+                    Path(evidence_image).as_posix()
+                    if isinstance(evidence_image, str)
+                    else None
+                ),
             )
         )
 
