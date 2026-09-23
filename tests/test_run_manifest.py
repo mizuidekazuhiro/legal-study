@@ -5,7 +5,11 @@ import pymupdf as fitz
 import pytest
 
 from legal_study.pdf.pipeline import PdfIngestPipeline
-from legal_study.run_manifest import RunManifestMismatchError, prepare_run
+from legal_study.run_manifest import (
+    RunManifestMismatchError,
+    calculate_pipeline_config_hash,
+    prepare_run,
+)
 from legal_study.settings import LocalSettings
 from legal_study.source_store import snapshot_source
 
@@ -45,6 +49,14 @@ def test_run_manifest_distinguishes_page_ranges_and_rejects_mixed_output(tmp_pat
     assert first.output_dir != second.output_dir
     assert first.manifest.source.sha256 == snapshot.sha256
     assert first.manifest.pymupdf_version
+    assert first.manifest.pipeline_config_sha256 == calculate_pipeline_config_hash(
+        pipeline.input_config()
+    )
+    assert first.manifest.code_revision_source in {
+        "environment",
+        "git",
+        "unavailable",
+    }
     assert first.manifest_path.exists()
 
     with pytest.raises(RunManifestMismatchError):
