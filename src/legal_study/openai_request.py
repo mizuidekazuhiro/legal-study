@@ -143,15 +143,15 @@ def _bind_immutable_bundle_values(
 
     defs = schema.get("$defs")
     if not isinstance(defs, dict):
-        raise ValueError("Structured output schema has no $defs")
+        raise TypeError("Structured output schema has no $defs")
 
     draft_source = defs.get("DraftSource")
     if not isinstance(draft_source, dict):
-        raise ValueError("Structured output schema has no DraftSource definition")
+        raise TypeError("Structured output schema has no DraftSource definition")
 
     properties = draft_source.get("properties")
     if not isinstance(properties, dict):
-        raise ValueError("DraftSource schema has no properties")
+        raise TypeError("DraftSource schema has no properties")
 
     exact_values = {
         "source_sha256": bundle.source.source_sha256,
@@ -164,7 +164,7 @@ def _bind_immutable_bundle_values(
     for field_name, value in exact_values.items():
         field_schema = properties.get(field_name)
         if not isinstance(field_schema, dict):
-            raise ValueError(f"DraftSource schema missing field: {field_name}")
+            raise TypeError(f"DraftSource schema missing field: {field_name}")
         field_schema["enum"] = [value]
 
 
