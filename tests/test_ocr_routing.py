@@ -12,6 +12,7 @@ from legal_study.models import (
 from legal_study.pdf.ocr.routing import (
     OcrRoutingConfig,
     image_region_ocr_reason,
+    plan_ocr_targets,
     routed_image_regions,
     routed_suspect_native_regions,
 )
@@ -161,3 +162,55 @@ def test_scan_like_noise_suppression_can_be_disabled_for_diagnostics() -> None:
 
     assert len(routed_suspect_native_regions(page, config)) == 1
     assert len(routed_image_regions(page, config)) == 1
+
+
+def test_target_plan_records_suppression_and_keeps_vision_review_independent() -> None:
+    background = _image(
+        width_px=2480,
+        height_px=3508,
+        bbox=BBox(x0=0, y0=0, x1=595, y1=842),
+    )
+    pasted = _image(
+        width_px=1200,
+        height_px=800,
+        bbox=BBox(x0=80, y0=250, x1=300, y1=400),
+    )
+    pasted.image_index = 1
+    page = _scan_like_page(image_regions=[background, pasted]).model_copy(
+        update={"annotation_count": 1, "vision_review_recommended": True}
+    )
+
+    plan = plan_ocr_targets(page, OcrRoutingConfig())
+    payload = plan.as_dict()
+
+    assert plan.full_page_ocr is True
+    assert len(plan.surgical_regions) == 0
+    assert [item[0].image_index for item in plan.image_regions] == [1]
+    assert {
+        item["reason"] for item in payload["suppressed_targets"]
+    } == {
+        "redundant_with_full_page_ocr_scan_like_text_layer",
+        "duplicate_of_full_page_ocr_background_image",
+    }
+    assert payload["profile"]["vision_review_recommended"] is True
+    assert payload["profile"]["annotation_count"] == 1
+    assert payload["planned_targets"]["image_regions"][0]["page_coverage"] < 0.80
+
+
+def test_target_plan_diagnostic_mode_preserves_all_ocr_candidates() -> None:
+    background = _image(
+        width_px=2480,
+        height_px=3508,
+        bbox=BBox(x0=0, y0=0, x1=595, y1=842),
+    )
+    page = _scan_like_page(image_regions=[background])
+    config = OcrRoutingConfig(
+        suppress_surgical_on_scan_like=False,
+        suppress_scan_background_image_region=False,
+    )
+
+    plan = plan_ocr_targets(page, config)
+
+    assert len(plan.surgical_regions) == 1
+    assert len(plan.image_regions) == 1
+    assert plan.suppressed == ()
