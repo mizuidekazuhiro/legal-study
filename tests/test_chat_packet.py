@@ -173,3 +173,20 @@ def test_invalid_problem_packet_is_not_exported(tmp_path: Path) -> None:
 
     with pytest.raises(RuntimeError, match="not valid"):
         build_chat_packet(run_dir=run)
+
+
+def test_packet_without_supplemental_keeps_primary_evidence(tmp_path: Path) -> None:
+    run = _run(tmp_path)
+    (run / "supplemental_retrieval.json").unlink()
+
+    result = build_chat_packet(run_dir=run)
+
+    assert result.supplemental_included is False
+    with zipfile.ZipFile(result.packet_path) as archive:
+        assert set(archive.namelist()) == {
+            "packet_manifest.json",
+            "handoff.md",
+            "marker_index.json",
+            "CHAT_INSTRUCTIONS.md",
+            "review/page-0109-review.png",
+        }

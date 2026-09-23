@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pymupdf
@@ -5,6 +6,7 @@ import pymupdf
 from legal_study.automation.queue import AutomationStateStore, WorkStatus
 from legal_study.automation.worker import process_next_work_item
 from legal_study.page_identity import ensure_source_page_index
+from legal_study.problem_packet import handoff_markdown_filename
 from legal_study.settings import LocalSettings
 from legal_study.source_store import snapshot_source
 from legal_study.state import QuestionStateStore, QuestionStatus
@@ -27,6 +29,35 @@ class FakePipeline:
             "ok",
             encoding="utf-8",
         )
+
+
+class PacketReadyPipeline(FakePipeline):
+    def __init__(self, *, valid: bool = True) -> None:
+        super().__init__()
+        self.valid = valid
+
+    def run(self, source, prepared, *, pages=None):
+        super().run(source, prepared, pages=pages)
+        root = prepared.output_dir
+        selected = list(pages or [])
+        canonical = {
+            "source": {"sha256": source.sha256, "requested_pages": selected},
+            "logical_markers": [],
+        }
+        (root / "canonical_source.json").write_text(
+            json.dumps(canonical), encoding="utf-8"
+        )
+        (root / "problem_validation.json").write_text(
+            json.dumps({"valid": self.valid}), encoding="utf-8"
+        )
+        handoff = handoff_markdown_filename(
+            prepared.manifest.subject, prepared.manifest.question
+        )
+        (root / handoff).write_text("# Page Reading Pack\n", encoding="utf-8")
+        review = root / "handoff_review"
+        review.mkdir()
+        for page in selected:
+            (review / f"page-{page:04d}-review.png").write_bytes(b"png")
 
 
 def _write_pdf(path: Path) -> None:
@@ -96,6 +127,7 @@ def test_worker_processes_exact_stable_pages_and_persists_run(tmp_path: Path) ->
     assert item.status == WorkStatus.COMPLETED
     assert item.output_dir == result.output_dir
     assert item.run_id == result.run_id
+    assert result.chat_packet_status is None
 
 
 def test_worker_failure_returns_question_to_sync_stable(tmp_path: Path) -> None:
@@ -174,3 +206,52 @@ def test_worker_rejects_legacy_item_without_source_snapshot(tmp_path: Path) -> N
     stored = questions.get("criminal", "22")
     assert stored is not None
     assert stored.status == QuestionStatus.SYNC_STABLE
+
+
+def test_worker_completes_only_after_packet_is_published(tmp_path: Path) -> None:
+    settings, queue, _questions, _source_sha = _queue_question(tmp_path)
+    bridge = tmp_path / "LegalStudy_ChatBridge"
+    pending = bridge / "00_pending"
+    pending.mkdir(parents=True)
+
+    result = process_next_work_item(
+        pipeline=PacketReadyPipeline(), settings=settings, bridge_root=bridge
+    )
+
+    assert result.queue_status == WorkStatus.COMPLETED
+    assert result.chat_packet_status == "PUBLISHED"
+    assert len(list(pending.glob("*.chat_packet.zip"))) == 1
+    assert queue.get_work_item(result.work_item_id or -1).status == WorkStatus.COMPLETED
+
+
+def test_worker_does_not_complete_when_publish_fails(tmp_path: Path) -> None:
+    settings, queue, questions, _source_sha = _queue_question(tmp_path)
+    bridge = tmp_path / "LegalStudy_ChatBridge"
+    bridge.mkdir()
+
+    result = process_next_work_item(
+        pipeline=PacketReadyPipeline(), settings=settings, bridge_root=bridge
+    )
+
+    assert result.queue_status == WorkStatus.FAILED
+    assert result.chat_packet_status is None
+    assert queue.get_work_item(result.work_item_id or -1).status == WorkStatus.FAILED
+    assert questions.get("criminal", "22").status == QuestionStatus.SYNC_STABLE
+    assert not (bridge / "00_pending").exists()
+
+
+def test_worker_does_not_publish_invalid_run(tmp_path: Path) -> None:
+    settings, queue, _questions, _source_sha = _queue_question(tmp_path)
+    bridge = tmp_path / "LegalStudy_ChatBridge"
+    pending = bridge / "00_pending"
+    pending.mkdir(parents=True)
+
+    result = process_next_work_item(
+        pipeline=PacketReadyPipeline(valid=False),
+        settings=settings,
+        bridge_root=bridge,
+    )
+
+    assert result.queue_status == WorkStatus.FAILED
+    assert queue.get_work_item(result.work_item_id or -1).status == WorkStatus.FAILED
+    assert list(pending.iterdir()) == []
