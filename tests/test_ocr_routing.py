@@ -214,3 +214,92 @@ def test_target_plan_diagnostic_mode_preserves_all_ocr_candidates() -> None:
     assert len(plan.surgical_regions) == 1
     assert len(plan.image_regions) == 1
     assert plan.suppressed == ()
+
+
+def _born_digital_page(*, image_regions: list[RawImageRegion]) -> PageInspection:
+    return PageInspection(
+        page_number=1,
+        width=595,
+        height=842,
+        native_text="刑法の本文",
+        native_char_count=5,
+        native_quality_score=1.0,
+        text_layer_trust=TextLayerTrust.HIGH,
+        text_layer_origin=TextLayerOrigin.BORN_DIGITAL_LIKELY,
+        image_coverage=0.10,
+        largest_image_coverage=0.05,
+        drawing_count=0,
+        annotation_count=0,
+        mode=PageMode.HYBRID,
+        ocr_recommended=False,
+        vision_review_recommended=True,
+        raw_image_regions=image_regions,
+    )
+
+
+def _edge_hole(*, image_index: int, y0: float) -> RawImageRegion:
+    return RawImageRegion(
+        image_index=image_index,
+        bbox=BBox(x0=520, y0=y0, x1=590, y1=y0 + 80),
+        raw={"width": 320, "height": 320},
+    )
+
+
+def test_repetitive_edge_holes_are_suppressed_but_raw_evidence_is_retained() -> None:
+    holes = [
+        _edge_hole(image_index=1, y0=80),
+        _edge_hole(image_index=2, y0=260),
+        _edge_hole(image_index=3, y0=440),
+        _edge_hole(image_index=4, y0=620),
+    ]
+    substantive = _image(
+        width_px=1200,
+        height_px=800,
+        bbox=BBox(x0=180, y0=300, x1=400, y1=450),
+    )
+    substantive.image_index = 10
+    page = _born_digital_page(image_regions=[*holes, substantive])
+
+    plan = plan_ocr_targets(page, OcrRoutingConfig())
+    payload = plan.as_dict()
+
+    assert [item[0].image_index for item in plan.image_regions] == [10]
+    assert {
+        item.source_index
+        for item in plan.suppressed
+        if item.reason == "repetitive_edge_image_noise_likely_binder_hole"
+    } == {1, 2, 3, 4}
+    assert [region.image_index for region in page.raw_image_regions] == [1, 2, 3, 4, 10]
+    assert payload["profile"]["raw_image_region_count"] == 5
+
+
+def test_irregular_edge_images_are_not_suppressed_as_binder_holes() -> None:
+    images = [
+        _edge_hole(image_index=1, y0=80),
+        _edge_hole(image_index=2, y0=260),
+        _edge_hole(image_index=3, y0=600),
+    ]
+    page = _born_digital_page(image_regions=images)
+
+    plan = plan_ocr_targets(page, OcrRoutingConfig())
+
+    assert [item[0].image_index for item in plan.image_regions] == [1, 2, 3]
+    assert not any(
+        item.reason == "repetitive_edge_image_noise_likely_binder_hole"
+        for item in plan.suppressed
+    )
+
+
+def test_repetitive_edge_suppression_can_be_disabled_for_diagnostics() -> None:
+    holes = [
+        _edge_hole(image_index=1, y0=80),
+        _edge_hole(image_index=2, y0=260),
+        _edge_hole(image_index=3, y0=440),
+    ]
+    page = _born_digital_page(image_regions=holes)
+    config = OcrRoutingConfig(suppress_repetitive_edge_image_regions=False)
+
+    plan = plan_ocr_targets(page, config)
+
+    assert [item[0].image_index for item in plan.image_regions] == [1, 2, 3]
+    assert plan.suppressed == ()
