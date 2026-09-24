@@ -12,7 +12,7 @@ $ErrorActionPreference = "Stop"
 if (-not $RepoRoot) { $RepoRoot = Join-Path $PSScriptRoot ".." }
 $RepoRoot = [System.IO.Path]::GetFullPath($RepoRoot)
 if (-not $PythonPath) {
-    $PythonPath = Join-Path (Split-Path $RepoRoot -Parent) ".venv\Scripts\python.exe"
+    $PythonPath = Join-Path $RepoRoot ".venv\Scripts\python.exe"
 }
 if (-not $HomePath) {
     $HomePath = if ($env:LEGAL_STUDY_HOME) {
@@ -65,7 +65,8 @@ if ($repoExists) {
         $head = $null
     }
 }
-Report "Branch" ($branch -eq "feat/study-automation-v1")
+Report "Branch" (-not [string]::IsNullOrWhiteSpace($branch))
+if ($branch) { Write-Output "Branch name: $branch" }
 if ($head -match '^[0-9a-f]{40}$') {
     Write-Output "HEAD: $head"
 } else {
