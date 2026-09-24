@@ -12,7 +12,7 @@
 $ErrorActionPreference = "Stop"
 
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$Python = Join-Path (Split-Path $RepoRoot -Parent) ".venv\Scripts\python.exe"
+$Python = Join-Path $RepoRoot ".venv\Scripts\python.exe"
 if ([string]::IsNullOrWhiteSpace($BridgeRoot)) {
     $BridgeRoot = if ($env:LEGAL_STUDY_CHAT_BRIDGE_ROOT) {
         $env:LEGAL_STUDY_CHAT_BRIDGE_ROOT
