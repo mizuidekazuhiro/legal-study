@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from itertools import pairwise
 
 from legal_study.models import PageInspection, RawImageRegion, SuspectRegion, TextLayerOrigin
 
@@ -272,7 +273,7 @@ def _regular_vertical_spacing(
     if len(regions) < 3:
         return False
     centers = sorted((region.bbox.y0 + region.bbox.y1) / 2.0 for region in regions)
-    gaps = [b - a for a, b in zip(centers, centers[1:], strict=False)]
+    gaps = [b - a for a, b in pairwise(centers)]
     if not gaps or min(gaps) <= 0.0:
         return False
     ordered = sorted(gaps)
