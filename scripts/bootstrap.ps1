@@ -14,6 +14,6 @@ Write-Host "  .\.venv\Scripts\legal-study.exe init"
 Write-Host "  .\.venv\Scripts\legal-study.exe doctor"
 Write-Host ""
 Write-Host "Optional OCR:"
-Write-Host "  .\.venv\Scripts\python.exe -m pip install -e \".[ocr]\""
+Write-Host '  .\.venv\Scripts\python.exe -m pip install -e ".[ocr]"'
 Write-Host "  .\.venv\Scripts\legal-study.exe warmup-ocr  # run once while online"
 Write-Host "  .\.venv\Scripts\legal-study.exe doctor --ocr"
