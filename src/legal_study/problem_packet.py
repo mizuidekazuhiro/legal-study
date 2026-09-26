@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from collections import defaultdict
 from datetime import UTC, datetime
@@ -10,6 +11,7 @@ import yaml
 
 from legal_study.handoff import create_handoff_review_sheets
 from legal_study.io_utils import atomic_write_json, atomic_write_text, file_sha256
+from legal_study.marker_text_alignment import align_markers_to_canonical_pages
 from legal_study.models import BBox, DocumentInspection, PageInspection, VectorMark
 from legal_study.reconciliation import (
     ReconciliationResult,
@@ -243,17 +245,14 @@ def build_logical_markers(markers: list[dict[str, Any]]) -> list[dict[str, Any]]
             )
         )
         raw_vector_ids = sorted(
-            {
-                int(raw_id)
-                for fragment in fragments
-                for raw_id in fragment.get("raw_vector_ids", [])
-            }
+            {int(raw_id) for fragment in fragments for raw_id in fragment.get("raw_vector_ids", [])}
         )
         logical.append(
             {
                 "id": f"p{page_number:04d}-logical-mark-{page_counts[page_number]:03d}",
                 "page_number": page_number,
                 "paint": fragments[0]["paint"],
+                "stroke_width": max(float(fragment.get("width") or 0.0) for fragment in fragments),
                 "color": fragments[0]["color"],
                 "bbox": union_bbox,
                 "bbox_list": bboxes,
@@ -315,9 +314,7 @@ def _review_task(
 ) -> dict[str, Any]:
     evidence_images = list(
         dict.fromkeys(
-            str(issue["evidence_image"])
-            for issue in issues
-            if issue.get("evidence_image")
+            str(issue["evidence_image"]) for issue in issues if issue.get("evidence_image")
         )
     )
     if rendered_image:
@@ -352,9 +349,7 @@ def build_grouped_needs_review(
     logical_markers: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     """Create page-level review tasks while retaining granular raw provenance."""
-    rendered_by_page = {
-        page.page_number: page.rendered_image for page in inspection.pages
-    }
+    rendered_by_page = {page.page_number: page.rendered_image for page in inspection.pages}
     reconciliation_by_id = {record.id: record for record in reconciliation.records}
     tasks: list[dict[str, Any]] = []
 
@@ -489,11 +484,7 @@ def build_grouped_needs_review(
     consolidated: list[dict[str, Any]] = []
     for page_number, page_level_tasks in sorted(page_tasks.items()):
         categories = sorted(
-            {
-                str(task["source_kind"])
-                for task in page_level_tasks
-                if task.get("source_kind")
-            }
+            {str(task["source_kind"]) for task in page_level_tasks if task.get("source_kind")}
         )
         issues: list[dict[str, Any]] = []
         for task in page_level_tasks:
@@ -510,10 +501,7 @@ def build_grouped_needs_review(
         consolidated_task = _review_task(
             page_number=page_number,
             source_kind="page_review",
-            reason=(
-                f"review_items={len(issues)};"
-                f"categories={','.join(categories)}"
-            ),
+            reason=(f"review_items={len(issues)};categories={','.join(categories)}"),
             issues=issues,
             rendered_image=rendered_by_page.get(page_number),
         )
@@ -548,6 +536,9 @@ def build_canonical_source(
         page_payloads.append(
             {
                 "page_number": page.page_number,
+                "page_width": page.width,
+                "page_height": page.height,
+                "page_rotation": page.rotation,
                 "embedded_text": page.native_text,
                 "native_text": page.native_text,
                 "reconciled_text": (
@@ -555,9 +546,7 @@ def build_canonical_source(
                 ),
                 "text_layer_trust": page.text_layer_trust.value,
                 "text_layer_origin": page.text_layer_origin.value,
-                "repair_auto_count": (
-                    repaired_page.auto_repaired_count if repaired_page else 0
-                ),
+                "repair_auto_count": (repaired_page.auto_repaired_count if repaired_page else 0),
                 "repair_review_count": (
                     repaired_page.review_required_count if repaired_page else 0
                 ),
@@ -571,11 +560,13 @@ def build_canonical_source(
                 "rendered_image": page.rendered_image,
             }
         )
-    logical_markers = build_logical_markers(markers)
+    logical_markers = align_markers_to_canonical_pages(
+        page_payloads,
+        build_logical_markers(markers),
+        ocr_payload,
+    )
 
-    reconciliation_records = [
-        record.model_dump(mode="json") for record in reconciliation.records
-    ]
+    reconciliation_records = [record.model_dump(mode="json") for record in reconciliation.records]
     needs_review = build_grouped_needs_review(
         inspection=inspection,
         reconciliation=reconciliation,
@@ -586,7 +577,7 @@ def build_canonical_source(
     ocr_supplements = build_ocr_supplements(reconciliation)
 
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "subject": manifest.subject,
         "question": manifest.question,
         "source": {
@@ -843,18 +834,15 @@ def render_handoff_markdown(canonical: dict[str, Any]) -> str:
         if isinstance(sheets, dict):
             sheet = sheets.get(page_number) or sheets.get(str(page_number))
         supplements = supplements_by_page.get(page_number, [])
-        full_page_ocr = next(
-            (
-                item
-                for item in supplements
-                if item.get("source_kind") == "full_page" and item.get("text")
-            ),
-            None,
-        )
         low_trust = str(page["text_layer_trust"]).lower() == "low"
-        if low_trust and full_page_ocr is not None:
-            primary_mode = "independent_full_page_ocr"
-            primary_text = str(full_page_ocr["text"]).rstrip()
+        canonical_text = page.get("canonical_text")
+        canonical_source = page.get("canonical_text_source")
+        if canonical_source == "unavailable_requires_visual_review":
+            primary_mode = canonical_source
+            primary_text = "[No independent full-page OCR available. Inspect the review sheet.]"
+        elif isinstance(canonical_text, str) and isinstance(canonical_source, str):
+            primary_mode = canonical_source
+            primary_text = canonical_text.rstrip()
         elif low_trust:
             primary_mode = "unavailable_requires_visual_review"
             primary_text = "[No independent full-page OCR available. Inspect the review sheet.]"
@@ -909,9 +897,7 @@ def render_handoff_markdown(canonical: dict[str, Any]) -> str:
         if markers:
             marker_counts: dict[tuple[str, str], int] = defaultdict(int)
             for marker in markers:
-                marker_counts[
-                    (str(marker.get("color")), str(marker.get("review_status")))
-                ] += 1
+                marker_counts[(str(marker.get("color")), str(marker.get("review_status")))] += 1
             lines.extend(["### PDF Marking Summary", ""])
             for (color, status), count in sorted(marker_counts.items()):
                 lines.append(f"- {color} / {status}: {count}")
@@ -923,26 +909,17 @@ def render_handoff_markdown(canonical: dict[str, Any]) -> str:
             )
 
         if review:
-            issues = [
-                issue
-                for issue in review.get("issues", [])
-                if isinstance(issue, dict)
-            ]
+            issues = [issue for issue in review.get("issues", []) if isinstance(issue, dict)]
             text_issues = [
                 issue
                 for issue in issues
-                if issue.get("review_category")
-                in {"text_repair_page", "unresolved_evidence_page"}
+                if issue.get("review_category") in {"text_repair_page", "unresolved_evidence_page"}
             ]
             visual_count = sum(
-                1
-                for issue in issues
-                if issue.get("review_category") == "visual_markup_page"
+                1 for issue in issues if issue.get("review_category") == "visual_markup_page"
             )
             image_count = sum(
-                1
-                for issue in issues
-                if issue.get("review_category") == "image_region_page"
+                1 for issue in issues if issue.get("review_category") == "image_region_page"
             )
             lines.extend(["### Review Summary", ""])
             if visual_count:
@@ -999,12 +976,10 @@ def validate_problem_packet(
         canonical["source"]["sha256"] == manifest.source.sha256 == inspection.sha256
     )
     inspected_pages = [page.page_number for page in inspection.pages]
-    checks["page_range_matches"] = (
-        canonical["source"]["requested_pages"] == manifest.requested_pages
-        and (
-            manifest.requested_pages is None
-            or inspected_pages == manifest.requested_pages
-        )
+    checks["page_range_matches"] = canonical["source"][
+        "requested_pages"
+    ] == manifest.requested_pages and (
+        manifest.requested_pages is None or inspected_pages == manifest.requested_pages
     )
     markdown_bytes = markdown_path.read_bytes()
     markdown = markdown_bytes.decode("utf-8")
@@ -1063,7 +1038,8 @@ def validate_problem_packet(
                 low_trust_source_ok = (
                     low_trust_source_ok
                     and "- Primary text source: unavailable_requires_visual_review" in section
-                    and "[No independent full-page OCR available. Inspect the review sheet.]" in section
+                    and "[No independent full-page OCR available. Inspect the review sheet.]"
+                    in section
                 )
         else:
             primary_text_ok = (
@@ -1089,9 +1065,7 @@ def validate_problem_packet(
     checks["native_text_present"] = all(
         page.native_text.rstrip() in markdown for page in inspection.pages
     )
-    canonical_pages = {
-        int(page["page_number"]): page for page in canonical["pages"]
-    }
+    canonical_pages = {int(page["page_number"]): page for page in canonical["pages"]}
     checks["reconciled_text_present"] = all(
         str(canonical_pages[page.page_number]["reconciled_text"]).rstrip() in markdown
         for page in inspection.pages
@@ -1101,6 +1075,30 @@ def validate_problem_packet(
         and canonical_pages[page.page_number].get("text_layer_origin")
         for page in inspection.pages
     )
+    checks["canonical_text_hashes_valid"] = all(
+        page.get("canonical_text_sha256")
+        == hashlib.sha256(str(page.get("canonical_text") or "").encode("utf-8")).hexdigest()
+        for page in canonical_pages.values()
+    )
+    marker_ranges_valid = True
+    for marker in canonical["logical_markers"]:
+        page = canonical_pages.get(int(marker["page_number"]))
+        reference = marker.get("text_reference")
+        start = marker.get("canonical_start_char")
+        end = marker.get("canonical_end_char_exclusive")
+        range_valid = start is None and end is None and marker.get("exact_text") is None
+        if page is not None and isinstance(start, int) and isinstance(end, int):
+            text = str(page.get("canonical_text") or "")
+            range_valid = 0 <= start <= end <= len(text) and text[start:end] == marker.get(
+                "exact_text"
+            )
+        marker_ranges_valid = marker_ranges_valid and (
+            page is not None
+            and isinstance(reference, dict)
+            and reference.get("text_sha256") == page.get("canonical_text_sha256")
+            and range_valid
+        )
+    checks["logical_marker_canonical_ranges_valid"] = marker_ranges_valid
     repair_payload = canonical.get("repair", {})
     checks["repair_source_sha_matches"] = (
         isinstance(repair_payload, dict)
@@ -1138,9 +1136,7 @@ def validate_problem_packet(
                     )
     checks["auto_repairs_have_provenance"] = auto_repairs_safe
     checks["protected_content_never_auto_repaired"] = protected_never_auto
-    checks["low_trust_auto_repairs_have_full_page_support"] = (
-        low_trust_auto_repairs_corroborated
-    )
+    checks["low_trust_auto_repairs_have_full_page_support"] = low_trust_auto_repairs_corroborated
     checks["ocr_supplements_present"] = all(
         str(item["text"]).rstrip() in markdown
         for item in canonical["ocr_supplements"]
@@ -1171,8 +1167,10 @@ def validate_problem_packet(
     for marker in canonical["markers"]:
         page = page_by_number.get(int(marker["page_number"]))
         drawing_index = int(marker["drawing_index"])
-        raw_refs_ok = raw_refs_ok and page is not None and any(
-            raw.drawing_index == drawing_index for raw in page.raw_vector_drawings
+        raw_refs_ok = (
+            raw_refs_ok
+            and page is not None
+            and any(raw.drawing_index == drawing_index for raw in page.raw_vector_drawings)
         )
     checks["raw_vector_refs_valid"] = raw_refs_ok
     raw_marker_ids = {str(marker["id"]) for marker in canonical["markers"]}
@@ -1181,8 +1179,7 @@ def validate_problem_packet(
         page = page_by_number.get(int(marker["page_number"]))
         logical_refs_ok = logical_refs_ok and page is not None
         logical_refs_ok = logical_refs_ok and all(
-            str(marker_id) in raw_marker_ids
-            for marker_id in marker["constituent_marker_ids"]
+            str(marker_id) in raw_marker_ids for marker_id in marker["constituent_marker_ids"]
         )
         logical_refs_ok = logical_refs_ok and all(
             any(raw.drawing_index == int(raw_id) for raw in page.raw_vector_drawings)
@@ -1212,17 +1209,15 @@ def validate_problem_packet(
     checks["provenance_files_exist"] = provenance_files_ok
 
     if checks["yaml_parseable"]:
-        checks["frontmatter_needs_review_count_matches"] = (
-            int(frontmatter.get("needs_review_count", -1))
-            == len(canonical["needs_review"])
-        )
+        checks["frontmatter_needs_review_count_matches"] = int(
+            frontmatter.get("needs_review_count", -1)
+        ) == len(canonical["needs_review"])
         checks["frontmatter_source_sha_matches"] = (
             frontmatter.get("source_sha256") == manifest.source.sha256
         )
-        checks["frontmatter_review_issue_count_matches"] = (
-            int(frontmatter.get("review_issue_count", -1))
-            == int(canonical.get("review_issue_count", len(canonical["needs_review"])))
-        )
+        checks["frontmatter_review_issue_count_matches"] = int(
+            frontmatter.get("review_issue_count", -1)
+        ) == int(canonical.get("review_issue_count", len(canonical["needs_review"])))
     else:
         checks["frontmatter_needs_review_count_matches"] = False
         checks["frontmatter_source_sha_matches"] = False
@@ -1256,19 +1251,21 @@ def write_problem_packet(
     ocr_payload: dict[str, Any],
 ) -> tuple[Path, Path, dict[str, Any]]:
     canonical_path = run_dir / "canonical_source.json"
-    canonical = build_canonical_source(
-        manifest, inspection, reconciliation, repair, ocr_payload
-    )
+    canonical = build_canonical_source(manifest, inspection, reconciliation, repair, ocr_payload)
     canonical["handoff_review_sheets"] = create_handoff_review_sheets(
         run_dir=run_dir,
         canonical=canonical,
     )
+    for marker in canonical.get("logical_markers", []):
+        if marker.get("review_status") == ReviewStatus.AUTO_VERIFIED.value:
+            continue
+        sheet = canonical["handoff_review_sheets"].get(int(marker["page_number"]))
+        if sheet:
+            marker["evidence_image"] = sheet
     atomic_write_json(canonical_path, canonical)
     markdown_path = run_dir / problem_markdown_filename(manifest.subject, manifest.question)
     atomic_write_text(markdown_path, render_problem_markdown(canonical))
-    handoff_path = run_dir / handoff_markdown_filename(
-        manifest.subject, manifest.question
-    )
+    handoff_path = run_dir / handoff_markdown_filename(manifest.subject, manifest.question)
     atomic_write_text(handoff_path, render_handoff_markdown(canonical))
     validation = validate_problem_packet(
         run_dir=run_dir,

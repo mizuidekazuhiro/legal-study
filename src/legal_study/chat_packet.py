@@ -54,14 +54,10 @@ def build_chat_packet(
         if not required.is_file():
             raise FileNotFoundError(f"Required run artifact is missing: {required}")
 
-    manifest = RunManifest.model_validate_json(
-        manifest_path.read_text(encoding="utf-8")
-    )
+    manifest = RunManifest.model_validate_json(manifest_path.read_text(encoding="utf-8"))
     validation = json.loads(validation_path.read_text(encoding="utf-8"))
     if validation.get("valid") is not True:
-        raise RuntimeError(
-            "problem_validation.json is not valid; refusing to build Chat packet"
-        )
+        raise RuntimeError("problem_validation.json is not valid; refusing to build Chat packet")
 
     canonical = json.loads(canonical_path.read_text(encoding="utf-8"))
     source = canonical.get("source") or {}
@@ -75,9 +71,17 @@ def build_chat_packet(
     if not handoff_path.is_file():
         raise FileNotFoundError(f"Handoff Markdown is missing: {handoff_path}")
 
-    marker_index = [
-        _compact_marker(item)
-        for item in (canonical.get("logical_markers") or [])
+    marker_index = [_compact_marker(item) for item in (canonical.get("logical_markers") or [])]
+    marker_schema_v2 = int(canonical.get("schema_version", 0)) >= 4
+    page_text_index = [
+        {
+            "page_number": int(page["page_number"]),
+            "text": str(page.get("canonical_text") or page.get("reconciled_text") or ""),
+            "text_sha256": page.get("canonical_text_sha256"),
+            "source": page.get("canonical_text_source", "legacy_reconciled_text"),
+        }
+        for page in (canonical.get("pages") or [])
+        if isinstance(page, dict) and page.get("page_number") is not None
     ]
 
     review_files: list[tuple[int, Path]] = []
@@ -97,10 +101,7 @@ def build_chat_packet(
         supplemental = SupplementalRetrievalBundle.model_validate_json(
             supplemental_file.read_text(encoding="utf-8")
         )
-        if (
-            supplemental.subject != manifest.subject
-            or supplemental.question != manifest.question
-        ):
+        if supplemental.subject != manifest.subject or supplemental.question != manifest.question:
             raise RuntimeError("Supplemental retrieval identity does not match run")
         supplemental_payload = _compact_supplemental(supplemental)
 
@@ -111,7 +112,7 @@ def build_chat_packet(
         run_id=manifest.run_id,
     )
     packet_manifest = {
-        "schema_version": "chat_packet.v1",
+        "schema_version": "chat_packet.v2" if marker_schema_v2 else "chat_packet.v1",
         "subject": manifest.subject,
         "question": manifest.question,
         "source_sha256": manifest.source.sha256,
@@ -119,6 +120,9 @@ def build_chat_packet(
         "requested_pages": manifest.requested_pages,
         "handoff_file": "handoff.md",
         "logical_marker_count": len(marker_index),
+        "marker_index_schema_version": (
+            "marker_index.v2" if marker_schema_v2 else "marker_index.v1"
+        ),
         "review_sheet_count": len(review_files),
         "supplemental_included": supplemental_payload is not None,
         "project_instructions_included": False,
@@ -152,24 +156,30 @@ def build_chat_packet(
     }
 
     target = (
-        output_path.expanduser().resolve()
-        if output_path is not None
-        else root / "chat_packet.zip"
+        output_path.expanduser().resolve() if output_path is not None else root / "chat_packet.zip"
     )
     target.parent.mkdir(parents=True, exist_ok=True)
     if target.exists():
-        raise FileExistsError(
-            f"Chat packet already exists; refusing overwrite: {target}"
-        )
+        raise FileExistsError(f"Chat packet already exists; refusing overwrite: {target}")
 
     with zipfile.ZipFile(target, "x", compression=zipfile.ZIP_DEFLATED) as archive:
         _write_json(archive, "packet_manifest.json", packet_manifest)
         archive.writestr("handoff.md", handoff_path.read_text(encoding="utf-8"))
-        _write_json(
-            archive,
-            "marker_index.json",
-            {"logical_markers": marker_index},
-        )
+        marker_payload: dict[str, Any] = {"logical_markers": marker_index}
+        if marker_schema_v2:
+            marker_payload.update(
+                {
+                    "schema_version": "marker_index.v2",
+                    "range_semantics": "page_unicode_codepoints_end_exclusive",
+                }
+            )
+        _write_json(archive, "marker_index.json", marker_payload)
+        if marker_schema_v2:
+            _write_json(
+                archive,
+                "page_text.json",
+                {"schema_version": "page_text.v1", "pages": page_text_index},
+            )
         if supplemental_payload is not None:
             _write_json(archive, "supplemental.json", supplemental_payload)
         archive.writestr("CHAT_INSTRUCTIONS.md", _chat_instructions())
@@ -205,8 +215,18 @@ def _compact_marker(item: dict[str, Any]) -> dict[str, Any]:
         "review_status",
         "reason",
         "evidence_image",
+        "canonical_start_char",
+        "canonical_end_char_exclusive",
+        "character_range_semantics",
+        "text_reference",
+        "position_status",
+        "text_accuracy_status",
     )
-    return {key: item.get(key) for key in allowed if key in item}
+    compact = {key: item.get(key) for key in allowed if key in item}
+    if compact.get("review_status") != "AUTO_VERIFIED":
+        page_number = int(compact["page_number"])
+        compact["evidence_image"] = f"review/page-{page_number:04d}-review.png"
+    return compact
 
 
 def _compact_supplemental(

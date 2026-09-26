@@ -1,3 +1,4 @@
+import hashlib
 import json
 import zipfile
 from pathlib import Path
@@ -7,6 +8,7 @@ import pytest
 from legal_study.chat_bridge_worker import BridgeAction, BridgeCommand
 from legal_study.chat_contract import command_filename
 from legal_study.chat_packet import build_chat_packet
+from legal_study.chat_packet_validation import validate_chat_packet_structure
 from legal_study.chat_result import ChatStudyResult
 
 
@@ -182,12 +184,23 @@ def test_build_chat_packet_is_compact_and_project_instruction_free(tmp_path: Pat
         assert contract["command"]["filename_template"].format(
             result_sha256="c" * 64, action="apply_obsidian"
         ) == command_filename(
-            subject="criminal", question="12", run_id="r" * 64,
-            result_sha256="c" * 64, action=BridgeAction.APPLY_OBSIDIAN,
+            subject="criminal",
+            question="12",
+            run_id="r" * 64,
+            result_sha256="c" * 64,
+            action=BridgeAction.APPLY_OBSIDIAN,
         )
         card_schema = contract["result"]["json_schema"]["$defs"]["ChatAnkiCard"]
-        assert {"name", "scope", "learning_type", "front", "back", "extra",
-                "anki_tags", "anki_deck"} <= set(card_schema["properties"])
+        assert {
+            "name",
+            "scope",
+            "learning_type",
+            "front",
+            "back",
+            "extra",
+            "anki_tags",
+            "anki_deck",
+        } <= set(card_schema["properties"])
         assert "api_key" not in json.dumps(contract).lower()
         assert "openai" not in json.dumps(contract).lower()
         instructions = archive.read("CHAT_INSTRUCTIONS.md").decode("utf-8")
@@ -229,3 +242,57 @@ def test_packet_without_supplemental_keeps_primary_evidence(tmp_path: Path) -> N
             "CHAT_INSTRUCTIONS.md",
             "review/page-0109-review.png",
         }
+
+
+def test_v2_packet_keeps_verified_page_text_marker_range_and_evidence(tmp_path: Path) -> None:
+    run = _run(tmp_path)
+    canonical_path = run / "canonical_source.json"
+    canonical = json.loads(canonical_path.read_text(encoding="utf-8"))
+    text = "前文（重要事実）後文"
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    canonical["schema_version"] = 4
+    canonical["pages"] = [
+        {
+            "page_number": 109,
+            "canonical_text": text,
+            "canonical_text_sha256": digest,
+            "canonical_text_source": "reconciled_text",
+        }
+    ]
+    marker = canonical["logical_markers"][0]
+    marker.update(
+        {
+            "canonical_start_char": 3,
+            "canonical_end_char_exclusive": 7,
+            "character_range_semantics": "page_unicode_codepoints_end_exclusive",
+            "text_reference": {
+                "page_number": 109,
+                "field": "canonical_text",
+                "text_sha256": digest,
+                "source": "reconciled_text",
+            },
+            "position_status": "VERIFIED",
+            "text_accuracy_status": "NEEDS_REVIEW",
+        }
+    )
+    canonical_path.write_text(json.dumps(canonical, ensure_ascii=False), encoding="utf-8")
+
+    result = build_chat_packet(run_dir=run)
+
+    assert validate_chat_packet_structure(Path(result.packet_path))["valid"] is True
+    with zipfile.ZipFile(result.packet_path) as archive:
+        assert "page_text.json" in archive.namelist()
+        manifest = json.loads(archive.read("packet_manifest.json"))
+        assert manifest["schema_version"] == "chat_packet.v2"
+        marker_payload = json.loads(archive.read("marker_index.json"))
+        assert marker_payload["schema_version"] == "marker_index.v2"
+        exported = marker_payload["logical_markers"][0]
+        assert exported["evidence_image"] == "review/page-0109-review.png"
+        page_text = json.loads(archive.read("page_text.json"))["pages"][0]
+        assert page_text["text_sha256"] == digest
+        assert (
+            page_text["text"][
+                exported["canonical_start_char"] : exported["canonical_end_char_exclusive"]
+            ]
+            == exported["exact_text"]
+        )
