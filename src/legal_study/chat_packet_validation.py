@@ -39,6 +39,23 @@ def validate_material_completeness(run_dir: Path) -> dict[str, Any]:
     problem_cue = any(cue in normalized for cue in _PROBLEM_CUES)
     answer_start = any(value in normalized for value in _ANSWER_START)
     answer_end = any(value in normalized for value in _ANSWER_END)
+    title_offset = min(
+        (
+            normalized.find(line)
+            for line in title_lines
+            if not any(role in line for role in _AUXILIARY)
+        ),
+        default=-1,
+    )
+    problem_offset = min(
+        (normalized.find(cue, title_offset) for cue in _PROBLEM_CUES if cue in normalized),
+        default=-1,
+    )
+    answer_offset = min(
+        (normalized.find(value) for value in _ANSWER_START if value in normalized),
+        default=-1,
+    )
+    answer_end_offset = max(normalized.rfind(value) for value in _ANSWER_END)
     requested = list(manifest.requested_pages or [])
     text_pages = [
         page
@@ -55,6 +72,9 @@ def validate_material_completeness(run_dir: Path) -> dict[str, Any]:
         "problem_or_question_text_present": problem_cue,
         "answer_start_present": answer_start,
         "answer_end_present": answer_end,
+        "material_sections_in_order": (
+            -1 < title_offset <= problem_offset < answer_offset < answer_end_offset
+        ),
         "requested_page_text_present": text_pages == requested,
         "requested_page_images_present": image_pages == requested,
     }
