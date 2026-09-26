@@ -182,6 +182,7 @@ def reconcile_unregistered_done(
         pages_by_number = {item.page_number: item for item in page_index.pages}
         state = QuestionStateStore(settings.state_db)
         retry_pages: list[int] = []
+        retry_questions: set[str] = set()
         for item in completions:
             resolution = item.resolution
             if resolution.question is None or resolution.start_page is None:
@@ -209,8 +210,9 @@ def reconcile_unregistered_done(
                     stable_page_ids=desired_ids,
                 )
                 retry_pages.append(item.done_detection.page_number)
+                retry_questions.add(resolution.question)
         if retry_pages:
-            completions = apply_done_markers_to_snapshot(
+            retried = apply_done_markers_to_snapshot(
                 snapshot,
                 subject=subject,
                 ocr_engine=ocr_engine,
@@ -219,6 +221,12 @@ def reconcile_unregistered_done(
                 max_backtrack=max_backtrack,
                 resolved_questions={page: resolutions[page] for page in retry_pages},
             )
+            completions = [
+                item
+                for item in completions
+                if item.resolution.question not in retry_questions
+            ] + retried
+            completions.sort(key=lambda item: item.done_detection.page_number)
     questions = _advance_and_queue_completions(
         completions,
         subject=subject,

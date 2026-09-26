@@ -345,6 +345,41 @@ def test_scoped_reconciliation_does_not_register_other_done_questions(
     assert state.get("criminal", "20") is not None
 
 
+def test_revision_and_new_done_are_both_retained_in_one_reconciliation(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.pdf"
+    settings = LocalSettings(home=tmp_path / "home")
+    _write_multi_done_pdf(source, done_pages={3, 5})
+    snapshot = snapshot_source(source, settings=settings)
+    state = QuestionStateStore(settings.state_db)
+    state.ensure_in_progress(
+        "criminal",
+        "12",
+        latest_source_sha256="old-source",
+        stable_page_ids=["old-page"],
+    )
+    state.transition("criminal", "12", QuestionStatus.DONE_DETECTED)
+    state.transition("criminal", "12", QuestionStatus.SYNC_STABLE)
+    state.transition("criminal", "12", QuestionStatus.PROCESSING)
+
+    _pages, questions = reconcile_unregistered_done(
+        snapshot,
+        subject="criminal",
+        ocr_engine=MultiDoneHeaderOcr(),
+        settings=settings,
+        allowed_questions={"12", "20"},
+        include_revisions=True,
+        done_pages=[3, 5],
+    )
+
+    assert [item.question for item in questions] == ["12", "20"]
+    assert [item.question for item in AutomationStateStore(settings.state_db).list_pending()] == [
+        "12",
+        "20",
+    ]
+
+
 class SequenceHeaderOcr:
     name = "fake-sequence-header"
 
