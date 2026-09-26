@@ -65,10 +65,10 @@ def _assess_question_start(
     *, page_number: int, text: str, confidence: float | None
 ) -> QuestionStartCandidate | None:
     normalized = _normalize_header_text(text)
+    lines = [line.strip() for line in normalized.splitlines() if line.strip()]
     header_candidates = _HEADER_LIKE.findall(normalized)
     if not header_candidates:
         return None
-    questions = [_extract_question_number(value) for value in header_candidates]
     if "目次" in normalized:
         return QuestionStartCandidate(
             page_number=page_number,
@@ -77,21 +77,38 @@ def _assess_question_start(
             text=text,
             confidence=confidence,
         )
-    first_match = _QUESTION_HEADER.search(normalized)
-    prefix = normalized[: first_match.start()] if first_match else normalized
-    header_line = next(
-        (line for line in normalized.splitlines() if _QUESTION_HEADER.search(line)),
-        "",
-    )
-    if first_match and ("参照" in header_line or len(prefix.strip()) > 24):
+    title_lines = [
+        line
+        for line in lines
+        if re.fullmatch(r"第\s*[0-9]{1,3}\s*問(?:\s*[^\s]{1,8})?", line)
+    ]
+    if not title_lines:
+        malformed_title = next(
+            (line for line in lines if _HEADER_LIKE.fullmatch(line)),
+            None,
+        )
+        if malformed_title is not None:
+            return QuestionStartCandidate(
+                page_number=page_number,
+                decision="UNRESOLVED_AMBIGUOUS_HEADING",
+                reasons=["ambiguous_or_malformed_heading"],
+                text=text,
+                confidence=confidence,
+            )
+        first = _QUESTION_HEADER.search(normalized)
         return QuestionStartCandidate(
             page_number=page_number,
-            question=questions[0] if questions else None,
+            question=first.group(1) if first else None,
             decision="REJECT_CROSS_REFERENCE",
             reasons=["heading_is_not_a_page_title"],
             text=text,
             confidence=confidence,
         )
+    questions = [
+        _QUESTION_HEADER.search(line).group(1)  # type: ignore[union-attr]
+        for line in title_lines
+    ]
+    header_line = title_lines[0]
     if None in questions or len(set(questions)) != 1:
         return QuestionStartCandidate(
             page_number=page_number,
@@ -102,9 +119,8 @@ def _assess_question_start(
         )
     question = questions[0]
     assert question is not None
-    has_problem_cue = any(cue in normalized for cue in _PROBLEM_CUES)
     auxiliary_heading = any(role in header_line for role in _AUXILIARY_ROLES)
-    if auxiliary_heading and not has_problem_cue:
+    if auxiliary_heading:
         return QuestionStartCandidate(
             page_number=page_number,
             question=question,
@@ -113,6 +129,7 @@ def _assess_question_start(
             text=text,
             confidence=confidence,
         )
+    has_problem_cue = any(cue in normalized for cue in _PROBLEM_CUES)
     reasons = ["exact_question_heading"]
     if re.search(rf"(?<!\d){re.escape(question)}\s*[-－]\s*1(?!\d)", normalized):
         reasons.append("booklet_part_1")
