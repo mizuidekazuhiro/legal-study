@@ -9,6 +9,7 @@ import pymupdf
 from pydantic import BaseModel, Field
 
 from legal_study.completion.done_marker import DoneDetection, detect_done_markers
+from legal_study.io_utils import atomic_write_json
 from legal_study.page_identity import ensure_source_page_index
 from legal_study.pdf.ocr.base import OcrEngine
 from legal_study.settings import LocalSettings
@@ -50,6 +51,30 @@ class CompletionApplyResult(BaseModel):
     previous_status: QuestionStatus | None = None
     current_status: QuestionStatus | None = None
     state_updated: bool = False
+
+
+def write_question_resolution_audit(
+    *,
+    settings: LocalSettings,
+    snapshot: SourceSnapshot,
+    resolution: QuestionResolution,
+) -> Path:
+    path = (
+        settings.cache_dir
+        / "completion_audit"
+        / snapshot.sha256
+        / f"done-page-{resolution.done_page:04d}.json"
+    )
+    atomic_write_json(
+        path,
+        {
+            "schema_version": 1,
+            "source_sha256": snapshot.sha256,
+            "resolver_version": 2,
+            "resolution": resolution.model_dump(mode="json"),
+        },
+    )
+    return path
 
 
 def _normalize_header_text(text: str) -> str:
@@ -284,6 +309,11 @@ def apply_done_markers_to_snapshot(
                 temp_dir=cfg.temp_dir / "question_headers",
                 max_backtrack=max_backtrack,
             )
+        write_question_resolution_audit(
+            settings=cfg,
+            snapshot=snapshot,
+            resolution=resolution,
+        )
         if not resolution.resolved or resolution.question is None or resolution.start_page is None:
             results.append(
                 CompletionApplyResult(

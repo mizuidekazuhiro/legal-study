@@ -148,6 +148,17 @@ def reconcile_unregistered_done(
     )
     if not detections:
         return [], []
+    if allowed_questions is not None:
+        queue = AutomationStateStore(settings.state_db)
+        completed = [
+            queue.get_by_identity(subject, question, snapshot.sha256)
+            for question in allowed_questions
+        ]
+        if completed and all(
+            item is not None and item.status == WorkStatus.COMPLETED
+            for item in completed
+        ):
+            return [item.page_number for item in detections], []
     selected_pages: list[int] = []
     resolutions = {}
     for detection in detections:

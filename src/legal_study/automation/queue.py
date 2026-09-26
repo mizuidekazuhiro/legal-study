@@ -239,6 +239,19 @@ class AutomationStateStore:
             ).fetchone()
         return self._work_item(row) if row is not None else None
 
+    def get_by_identity(
+        self, subject: str, question: str, source_sha256: str
+    ) -> WorkItem | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM automation_work_queue
+                WHERE subject = ? AND question = ? AND source_sha256 = ?
+                """,
+                (subject, question, source_sha256),
+            ).fetchone()
+        return self._work_item(row) if row is not None else None
+
     def list_pending(self) -> list[WorkItem]:
         with self._connect() as connection:
             rows = connection.execute(
