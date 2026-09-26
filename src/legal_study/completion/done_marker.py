@@ -291,12 +291,18 @@ def detect_done_markers(
         document.close()
 
 
-def detect_embedded_done_markers(pdf: str | Path) -> list[DoneDetection]:
+def detect_embedded_done_markers(
+    pdf: str | Path, *, pages: list[int] | None = None
+) -> list[DoneDetection]:
     """Find canonical embedded DONE stamps without rendering or OCRing pages."""
     document = pymupdf.open(pdf)
     try:
         results: list[DoneDetection] = []
-        for page in document:
+        selected = pages or list(range(1, len(document) + 1))
+        for page_number in selected:
+            if page_number < 1 or page_number > len(document):
+                raise ValueError(f"Page out of range: {page_number}")
+            page = document[page_number - 1]
             embedded = _embedded_image_detection(document, page)
             if embedded is not None and embedded.detected:
                 results.append(embedded)

@@ -134,6 +134,7 @@ def reconcile_unregistered_done(
     settings: LocalSettings,
     allowed_questions: set[str] | None = None,
     include_revisions: bool = False,
+    done_pages: list[int] | None = None,
     max_backtrack: int = 16,
 ) -> tuple[list[int], list[QuestionAutomationResult]]:
     """Queue DONE-stamped questions missing from the current-source workflow.
@@ -141,7 +142,10 @@ def reconcile_unregistered_done(
     Discovery uses embedded marker signatures only, so an unchanged PDF does not
     trigger a full render or OCR pass. Resolution OCR is limited to detected pages.
     """
-    detections = detect_embedded_done_markers(snapshot.snapshot_path)
+    detections = detect_embedded_done_markers(
+        snapshot.snapshot_path,
+        pages=done_pages,
+    )
     if not detections:
         return [], []
     selected_pages: list[int] = []
