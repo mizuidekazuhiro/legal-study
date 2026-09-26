@@ -3,7 +3,11 @@ from pathlib import Path
 import pymupdf
 import pytest
 
-from legal_study.automation.orchestrator import process_pdf_update, recover_watch_startup
+from legal_study.automation.orchestrator import (
+    process_pdf_update,
+    reconcile_unregistered_done,
+    recover_watch_startup,
+)
 from legal_study.automation.queue import AutomationStateStore, WorkStatus
 from legal_study.completion.done_marker import done_stamp_png_bytes
 from legal_study.page_identity import ensure_source_page_index
@@ -214,7 +218,7 @@ def test_restart_recovery_returns_running_queue_item_to_pending(tmp_path: Path) 
     assert pending[0].question == "21"
 
 
-def test_first_watch_startup_establishes_baseline_without_historical_replay(
+def test_first_watch_startup_reconciles_unregistered_done_without_full_change(
     tmp_path: Path,
 ) -> None:
     source = tmp_path / "source.pdf"
@@ -233,8 +237,24 @@ def test_first_watch_startup_establishes_baseline_without_historical_replay(
 
     assert current is not None
     assert result.reason == "INITIAL_BASELINE_ESTABLISHED"
-    assert result.questions == []
-    assert AutomationStateStore(settings.state_db).list_pending() == []
+    assert [item.question for item in result.questions] == ["22"]
+    pending = AutomationStateStore(settings.state_db).list_pending()
+    assert len(pending) == 1
+    assert pending[0].question == "22"
+
+    _again, repeated = recover_watch_startup(
+        source,
+        subject="criminal",
+        ocr_engine=HeaderOcr(),
+        settings=settings,
+        stability_interval_seconds=0,
+        stability_equal_observations=2,
+        stability_timeout_seconds=1,
+    )
+
+    assert repeated.reason == "PERSISTED_BASELINE_UNCHANGED"
+    assert repeated.questions[0].queue_item_id == pending[0].id
+    assert len(AutomationStateStore(settings.state_db).list_pending()) == 1
 
 
 
@@ -301,6 +321,28 @@ def test_persistent_old_done_stamp_does_not_retrigger_when_new_done_is_added(
     assert 5 in result.candidate_pages
     assert result.detected_done_pages == [5]
     assert [item.question for item in result.questions] == ["20"]
+
+
+def test_scoped_reconciliation_does_not_register_other_done_questions(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.pdf"
+    settings = LocalSettings(home=tmp_path / "home")
+    _write_multi_done_pdf(source, done_pages={3, 5})
+    snapshot = snapshot_source(source, settings=settings)
+
+    _pages, questions = reconcile_unregistered_done(
+        snapshot,
+        subject="criminal",
+        ocr_engine=MultiDoneHeaderOcr(),
+        settings=settings,
+        allowed_questions={"20"},
+    )
+
+    assert [item.question for item in questions] == ["20"]
+    state = QuestionStateStore(settings.state_db)
+    assert state.get("criminal", "12") is None
+    assert state.get("criminal", "20") is not None
 
 
 class SequenceHeaderOcr:

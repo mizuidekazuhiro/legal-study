@@ -289,3 +289,17 @@ def detect_done_markers(
         return results
     finally:
         document.close()
+
+
+def detect_embedded_done_markers(pdf: str | Path) -> list[DoneDetection]:
+    """Find canonical embedded DONE stamps without rendering or OCRing pages."""
+    document = pymupdf.open(pdf)
+    try:
+        results: list[DoneDetection] = []
+        for page in document:
+            embedded = _embedded_image_detection(document, page)
+            if embedded is not None and embedded.detected:
+                results.append(embedded)
+        return results
+    finally:
+        document.close()

@@ -13,9 +13,11 @@ from legal_study.automation.sync_stability import (
     mark_question_sync_stable_from_verified_hash,
     wait_for_sync_stable,
 )
+from legal_study.completion.done_marker import detect_embedded_done_markers
 from legal_study.completion.question_resolution import (
     CompletionApplyResult,
     apply_done_markers_to_snapshot,
+    resolve_question_for_done_page,
 )
 from legal_study.page_identity import (
     PageAlignment,
@@ -26,7 +28,7 @@ from legal_study.page_identity import (
 )
 from legal_study.pdf.ocr.base import OcrEngine
 from legal_study.settings import LocalSettings
-from legal_study.source_store import snapshot_source
+from legal_study.source_store import SourceSnapshot, snapshot_source
 from legal_study.state import QuestionStateStore, QuestionStatus
 
 
@@ -67,6 +69,156 @@ def changed_current_pages(alignment: PageAlignment) -> list[int]:
             if record.current_page is not None and record.classification not in ignored
         }
     )
+
+
+def _advance_and_queue_completions(
+    completions: list[CompletionApplyResult],
+    *,
+    subject: str,
+    verified_sha256: str,
+    snapshot: SourceSnapshot,
+    settings: LocalSettings,
+) -> list[QuestionAutomationResult]:
+    question_state = QuestionStateStore(settings.state_db)
+    automation_state = AutomationStateStore(settings.state_db)
+    results: list[QuestionAutomationResult] = []
+    for item in completions:
+        question = item.resolution.question
+        if question is None:
+            continue
+        sync_updated = False
+        status = item.current_status
+        if status == QuestionStatus.DONE_DETECTED:
+            synced = mark_question_sync_stable_from_verified_hash(
+                subject=subject,
+                question=question,
+                verified_sha256=verified_sha256,
+                settings=settings,
+            )
+            status = synced.current_status
+            sync_updated = synced.state_updated
+
+        queue_item_id = None
+        queue_status = None
+        if status in {QuestionStatus.SYNC_STABLE, QuestionStatus.PROCESSING}:
+            record = question_state.get(subject, question)
+            if record is not None and record.latest_source_sha256 == verified_sha256:
+                queued = automation_state.enqueue(
+                    subject=subject,
+                    question=question,
+                    source_sha256=verified_sha256,
+                    stable_page_ids=record.stable_page_ids,
+                    source_snapshot=snapshot,
+                )
+                queue_item_id = queued.id
+                queue_status = queued.status
+
+        results.append(
+            QuestionAutomationResult(
+                question=question,
+                done_page=item.done_detection.page_number,
+                status=status,
+                sync_state_updated=sync_updated,
+                queue_item_id=queue_item_id,
+                queue_status=queue_status,
+            )
+        )
+    return results
+
+
+def reconcile_unregistered_done(
+    snapshot: SourceSnapshot,
+    *,
+    subject: str,
+    ocr_engine: OcrEngine,
+    settings: LocalSettings,
+    allowed_questions: set[str] | None = None,
+    include_revisions: bool = False,
+    max_backtrack: int = 16,
+) -> tuple[list[int], list[QuestionAutomationResult]]:
+    """Queue DONE-stamped questions missing from the current-source workflow.
+
+    Discovery uses embedded marker signatures only, so an unchanged PDF does not
+    trigger a full render or OCR pass. Resolution OCR is limited to detected pages.
+    """
+    detections = detect_embedded_done_markers(snapshot.snapshot_path)
+    if not detections:
+        return [], []
+    selected_pages: list[int] = []
+    for detection in detections:
+        resolution = resolve_question_for_done_page(
+            snapshot.snapshot_path,
+            detection.page_number,
+            ocr_engine=ocr_engine,
+            temp_dir=settings.temp_dir / "question_headers",
+            max_backtrack=max_backtrack,
+        )
+        if (
+            resolution.resolved
+            and resolution.question is not None
+            and (allowed_questions is None or resolution.question in allowed_questions)
+        ):
+            selected_pages.append(detection.page_number)
+    if not selected_pages:
+        return [item.page_number for item in detections], []
+
+    completions = apply_done_markers_to_snapshot(
+        snapshot,
+        subject=subject,
+        ocr_engine=ocr_engine,
+        settings=settings,
+        pages=selected_pages,
+        max_backtrack=max_backtrack,
+    )
+    if include_revisions:
+        page_index = ensure_source_page_index(snapshot, settings.cache_dir)
+        pages_by_number = {item.page_number: item for item in page_index.pages}
+        state = QuestionStateStore(settings.state_db)
+        retry_pages: list[int] = []
+        for item in completions:
+            resolution = item.resolution
+            if resolution.question is None or resolution.start_page is None:
+                continue
+            desired_ids = [
+                pages_by_number[page].stable_page_id
+                for page in range(resolution.start_page, item.done_detection.page_number + 1)
+            ]
+            existing = state.get(subject, resolution.question)
+            if (
+                existing is not None
+                and existing.stable_page_ids != desired_ids
+                and existing.status in {
+                    QuestionStatus.PROCESSING,
+                    QuestionStatus.REVIEW_READY,
+                    QuestionStatus.DONE_DETECTED,
+                    QuestionStatus.SYNC_STABLE,
+                }
+            ):
+                state.transition(
+                    subject,
+                    resolution.question,
+                    QuestionStatus.IN_PROGRESS,
+                    latest_source_sha256=snapshot.sha256,
+                    stable_page_ids=desired_ids,
+                )
+                retry_pages.append(item.done_detection.page_number)
+        if retry_pages:
+            completions = apply_done_markers_to_snapshot(
+                snapshot,
+                subject=subject,
+                ocr_engine=ocr_engine,
+                settings=settings,
+                pages=retry_pages,
+                max_backtrack=max_backtrack,
+            )
+    questions = _advance_and_queue_completions(
+        completions,
+        subject=subject,
+        verified_sha256=snapshot.sha256,
+        snapshot=snapshot,
+        settings=settings,
+    )
+    return [item.page_number for item in detections], questions
 
 
 def establish_stable_baseline(
@@ -169,49 +321,13 @@ def process_pdf_update(
         item.done_detection.page_number for item in completions if item.done_detection.detected
     )
 
-    question_state = QuestionStateStore(cfg.state_db)
-    automation_state = AutomationStateStore(cfg.state_db)
-    for item in completions:
-        question = item.resolution.question
-        if question is None:
-            continue
-        sync_updated = False
-        status = item.current_status
-        if status == QuestionStatus.DONE_DETECTED:
-            synced = mark_question_sync_stable_from_verified_hash(
-                subject=subject,
-                question=question,
-                verified_sha256=stable.sha256,
-                settings=cfg,
-            )
-            status = synced.current_status
-            sync_updated = synced.state_updated
-
-        queue_item_id = None
-        queue_status = None
-        if status == QuestionStatus.SYNC_STABLE:
-            record = question_state.get(subject, question)
-            if record is not None and record.latest_source_sha256 == stable.sha256:
-                queued = automation_state.enqueue(
-                    subject=subject,
-                    question=question,
-                    source_sha256=stable.sha256,
-                    stable_page_ids=record.stable_page_ids,
-                    source_snapshot=snapshot,
-                )
-                queue_item_id = queued.id
-                queue_status = queued.status
-
-        result.questions.append(
-            QuestionAutomationResult(
-                question=question,
-                done_page=item.done_detection.page_number,
-                status=status,
-                sync_state_updated=sync_updated,
-                queue_item_id=queue_item_id,
-                queue_status=queue_status,
-            )
-        )
+    result.questions = _advance_and_queue_completions(
+        completions,
+        subject=subject,
+        verified_sha256=stable.sha256,
+        snapshot=snapshot,
+        settings=cfg,
+    )
     return current_index, result
 
 
@@ -256,7 +372,7 @@ def recover_watch_startup(
             pdf,
             current_index.source_sha256,
         )
-        return current_index, AutomationCycleResult(
+        result = AutomationCycleResult(
             source_path=source_path,
             reason="INITIAL_BASELINE_ESTABLISHED",
             stable=True,
@@ -264,9 +380,18 @@ def recover_watch_startup(
             current_source_sha256=current_index.source_sha256,
             recovered_work_items=recovered,
         )
+        snapshot = snapshot_source(pdf, settings=cfg)
+        result.detected_done_pages, result.questions = reconcile_unregistered_done(
+            snapshot,
+            subject=subject,
+            ocr_engine=ocr_engine,
+            settings=cfg,
+            max_backtrack=max_backtrack,
+        )
+        return current_index, result
 
     if watch_state.last_processed_sha256 == current_index.source_sha256:
-        return current_index, AutomationCycleResult(
+        result = AutomationCycleResult(
             source_path=source_path,
             reason="PERSISTED_BASELINE_UNCHANGED",
             stable=True,
@@ -275,6 +400,15 @@ def recover_watch_startup(
             current_source_sha256=current_index.source_sha256,
             recovered_work_items=recovered,
         )
+        snapshot = snapshot_source(pdf, settings=cfg)
+        result.detected_done_pages, result.questions = reconcile_unregistered_done(
+            snapshot,
+            subject=subject,
+            ocr_engine=ocr_engine,
+            settings=cfg,
+            max_backtrack=max_backtrack,
+        )
+        return current_index, result
 
     try:
         previous_index = load_source_page_index(
