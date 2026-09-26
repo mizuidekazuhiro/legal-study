@@ -19,7 +19,7 @@ $path = Join-Path $root 'service-state.json'
 if (Test-Path -LiteralPath $path) {
     if ((Get-Item -LiteralPath $path).Length -le 64KB) {
         for ($attempt=0; $attempt -lt 10; $attempt++) {
-            try { $state = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json; break }
+            try { $state = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json; break }
             catch { if($attempt -eq 9){$issues.Add('INVALID_HEARTBEAT')}else{Start-Sleep -Milliseconds 50} }
         }
     } else { $issues.Add('OVERSIZED_HEARTBEAT') }
@@ -64,7 +64,7 @@ $snapshot = Join-Path $OutputDirectory 'legal-study-health-latest.json'
 $delta = $null
 if ((Test-Path -LiteralPath $snapshot) -and (Get-Item -LiteralPath $snapshot).Length -le 64KB) {
     try {
-        $old = Get-Content -LiteralPath $snapshot -Raw | ConvertFrom-Json
+        $old = Get-Content -LiteralPath $snapshot -Raw -Encoding UTF8 | ConvertFrom-Json
         $delta = [long]$old.FreeBytes - $free
         if ($delta -gt 5GB) { $issues.Add('VOLUME_FREE_SPACE_DECREASE_OVER_5_GIB') }
     } catch { $issues.Add('PREVIOUS_HEALTH_UNREADABLE') }
