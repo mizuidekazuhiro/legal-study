@@ -17,6 +17,17 @@ from legal_study.state import QuestionStateStore, QuestionStatus
 
 _QUESTION_HEADER = re.compile(r"第\s*([0-9]{1,3})\s*問")
 _HEADER_LIKE = re.compile(r"第\s*[^\s問]{0,8}\s*問")
+_AUXILIARY_ROLES = ("指針", "総括", "MEMO", "メモ", "答案例", "答案")
+_PROBLEM_CUES = ("問題文", "設問", "次の", "以下", "罪責", "論ぜ", "答えよ")
+
+
+class QuestionStartCandidate(BaseModel):
+    page_number: int
+    question: str | None = None
+    decision: str
+    reasons: list[str] = Field(default_factory=list)
+    text: str
+    confidence: float | None = None
 
 
 class QuestionResolution(BaseModel):
@@ -28,6 +39,7 @@ class QuestionResolution(BaseModel):
     header_text: str | None = None
     header_confidence: float | None = None
     reason: str | None = None
+    candidates: list[QuestionStartCandidate] = Field(default_factory=list)
 
 
 class CompletionApplyResult(BaseModel):
@@ -47,6 +59,73 @@ def _normalize_header_text(text: str) -> str:
 def _extract_question_number(text: str) -> str | None:
     match = _QUESTION_HEADER.fullmatch(_normalize_header_text(text))
     return match.group(1) if match else None
+
+
+def _assess_question_start(
+    *, page_number: int, text: str, confidence: float | None
+) -> QuestionStartCandidate | None:
+    normalized = _normalize_header_text(text)
+    header_candidates = _HEADER_LIKE.findall(normalized)
+    if not header_candidates:
+        return None
+    questions = [_extract_question_number(value) for value in header_candidates]
+    if "目次" in normalized:
+        return QuestionStartCandidate(
+            page_number=page_number,
+            decision="REJECT_TABLE_OF_CONTENTS",
+            reasons=["table_of_contents"],
+            text=text,
+            confidence=confidence,
+        )
+    first_match = _QUESTION_HEADER.search(normalized)
+    prefix = normalized[: first_match.start()] if first_match else normalized
+    header_line = next(
+        (line for line in normalized.splitlines() if _QUESTION_HEADER.search(line)),
+        "",
+    )
+    if first_match and ("参照" in header_line or len(prefix.strip()) > 24):
+        return QuestionStartCandidate(
+            page_number=page_number,
+            question=questions[0] if questions else None,
+            decision="REJECT_CROSS_REFERENCE",
+            reasons=["heading_is_not_a_page_title"],
+            text=text,
+            confidence=confidence,
+        )
+    if None in questions or len(set(questions)) != 1:
+        return QuestionStartCandidate(
+            page_number=page_number,
+            decision="UNRESOLVED_AMBIGUOUS_HEADING",
+            reasons=["ambiguous_or_malformed_heading"],
+            text=text,
+            confidence=confidence,
+        )
+    question = questions[0]
+    assert question is not None
+    has_problem_cue = any(cue in normalized for cue in _PROBLEM_CUES)
+    auxiliary_heading = any(role in header_line for role in _AUXILIARY_ROLES)
+    if auxiliary_heading and not has_problem_cue:
+        return QuestionStartCandidate(
+            page_number=page_number,
+            question=question,
+            decision="REJECT_AUXILIARY_HEADING",
+            reasons=["auxiliary_heading_without_problem_text"],
+            text=text,
+            confidence=confidence,
+        )
+    reasons = ["exact_question_heading"]
+    if re.search(rf"(?<!\d){re.escape(question)}\s*[-－]\s*1(?!\d)", normalized):
+        reasons.append("booklet_part_1")
+    if has_problem_cue:
+        reasons.append("problem_or_question_text")
+    return QuestionStartCandidate(
+        page_number=page_number,
+        question=question,
+        decision="ACCEPT_PROBLEM_START",
+        reasons=reasons,
+        text=text,
+        confidence=confidence,
+    )
 
 
 def _render_header_crop(
@@ -86,6 +165,7 @@ def resolve_question_for_done_page(
     temp_dir.mkdir(parents=True, exist_ok=True)
     document = pymupdf.open(pdf)
     scanned_pages: list[int] = []
+    candidates: list[QuestionStartCandidate] = []
     try:
         if done_page < 1 or done_page > len(document):
             raise ValueError(f"Page out of range: {done_page}")
@@ -107,20 +187,27 @@ def resolve_question_for_done_page(
             finally:
                 crop.unlink(missing_ok=True)
 
-            header_candidates = _HEADER_LIKE.findall(_normalize_header_text(ocr.text))
-            if not header_candidates:
+            candidate = _assess_question_start(
+                page_number=page_number,
+                text=ocr.text,
+                confidence=ocr.confidence,
+            )
+            if candidate is None:
                 continue
-            questions = [_extract_question_number(text) for text in header_candidates]
-            if None in questions or len(set(questions)) != 1:
+            candidates.append(candidate)
+            if candidate.decision == "UNRESOLVED_AMBIGUOUS_HEADING":
                 return QuestionResolution(
                     done_page=done_page,
                     resolved=False,
                     scanned_pages=scanned_pages,
                     header_text=ocr.text,
                     header_confidence=ocr.confidence,
+                    candidates=candidates,
                     reason="Ambiguous or malformed question heading; state was not changed.",
                 )
-            question = questions[0]
+            if candidate.decision != "ACCEPT_PROBLEM_START":
+                continue
+            question = candidate.question
             if question is not None:
                 return QuestionResolution(
                     done_page=done_page,
@@ -130,6 +217,7 @@ def resolve_question_for_done_page(
                     scanned_pages=scanned_pages,
                     header_text=ocr.text,
                     header_confidence=ocr.confidence,
+                    candidates=candidates,
                 )
     finally:
         document.close()
@@ -138,6 +226,7 @@ def resolve_question_for_done_page(
         done_page=done_page,
         resolved=False,
         scanned_pages=scanned_pages,
+        candidates=candidates,
         reason=(
             "No exact '第N問' heading was found in the scanned header regions; "
             "question state was not changed."

@@ -182,3 +182,81 @@ def test_two_distinct_headings_on_one_page_are_unresolved(tmp_path: Path) -> Non
     assert resolution.resolved is False
     assert resolution.question is None
     assert resolution.scanned_pages == [5, 4]
+
+
+def test_auxiliary_heading_is_not_used_as_question_start(tmp_path: Path) -> None:
+    pdf = tmp_path / "source.pdf"
+    _question_pdf(pdf)
+    engine = HeaderOcr(
+        {
+            2: "第26問\n26-1\n甲の罪責を論ぜよ。",
+            3: "第26問 指針\n26-4\n検討の指針",
+        }
+    )
+
+    resolution = resolve_question_for_done_page(
+        pdf,
+        5,
+        ocr_engine=engine,
+        temp_dir=tmp_path / "tmp",
+        max_backtrack=5,
+    )
+
+    assert resolution.resolved is True
+    assert resolution.question == "26"
+    assert resolution.start_page == 2
+    assert any(
+        item.page_number == 3 and item.decision == "REJECT_AUXILIARY_HEADING"
+        for item in resolution.candidates
+    )
+
+
+def test_problem_and_guidance_on_same_page_is_valid_start(tmp_path: Path) -> None:
+    pdf = tmp_path / "source.pdf"
+    _question_pdf(pdf)
+    engine = HeaderOcr(
+        {
+            2: "第27問\n27-1\n次の事例について甲の罪責を論ぜよ。\n指針",
+        }
+    )
+
+    resolution = resolve_question_for_done_page(
+        pdf,
+        5,
+        ocr_engine=engine,
+        temp_dir=tmp_path / "tmp",
+        max_backtrack=5,
+    )
+
+    assert resolution.resolved is True
+    assert resolution.question == "27"
+    assert resolution.start_page == 2
+    assert resolution.candidates[-1].decision == "ACCEPT_PROBLEM_START"
+
+
+def test_contents_and_cross_reference_are_not_problem_starts(tmp_path: Path) -> None:
+    pdf = tmp_path / "source.pdf"
+    _question_pdf(pdf)
+    engine = HeaderOcr(
+        {
+            1: "第28問\n28-1\n次の事例について論ぜよ。",
+            2: "目次\n第28問 200頁\n第29問 204頁",
+            4: "第28問を参照して検討する。",
+        }
+    )
+
+    resolution = resolve_question_for_done_page(
+        pdf,
+        5,
+        ocr_engine=engine,
+        temp_dir=tmp_path / "tmp",
+        max_backtrack=5,
+    )
+
+    assert resolution.resolved is True
+    assert resolution.start_page == 1
+    assert {item.decision for item in resolution.candidates} >= {
+        "REJECT_CROSS_REFERENCE",
+        "REJECT_TABLE_OF_CONTENTS",
+        "ACCEPT_PROBLEM_START",
+    }
