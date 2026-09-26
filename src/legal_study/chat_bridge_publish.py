@@ -8,6 +8,10 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field
 
 from legal_study.chat_packet import build_chat_packet
+from legal_study.chat_packet_validation import (
+    validate_chat_packet_structure,
+    validate_material_completeness,
+)
 from legal_study.run_manifest import RunManifest
 
 
@@ -54,11 +58,18 @@ def publish_run_to_bridge(
 
     temporary = pending / f".{filename}.{uuid.uuid4().hex}.partial"
     try:
+        material = validate_material_completeness(root)
+        if material["status"] != "PASS":
+            raise RuntimeError(
+                "material completeness validation failed: "
+                + ", ".join(material["missing"])
+            )
         build_chat_packet(
             run_dir=root,
             output_path=temporary,
             supplemental_path=None,
         )
+        validate_chat_packet_structure(temporary)
         with temporary.open("rb+") as file_handle:
             os.fsync(file_handle.fileno())
 

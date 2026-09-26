@@ -61,7 +61,9 @@ def _write_run(root: Path) -> Path:
         encoding="utf-8",
     )
     (run / "criminal_16_handoff.md").write_text(
-        "# Page Reading Pack\n",
+        "# Page Reading Pack\n\n## PDF page 200\n\n"
+        "第16問\n16-1\n次の事例について甲の罪責を論ぜよ。\n"
+        "答案例\n講師答案本文\n以上\n",
         encoding="utf-8",
     )
     (run / "handoff_review/page-0200-review.png").write_bytes(b"png")
@@ -122,20 +124,46 @@ def test_incomplete_run_never_publishes(tmp_path: Path, incomplete: str) -> None
     assert list(pending.iterdir()) == []
 
 
+def test_structurally_complete_packet_with_missing_problem_is_not_published(
+    tmp_path: Path,
+) -> None:
+    run = _write_run(tmp_path)
+    (run / "criminal_16_handoff.md").write_text(
+        "# Page Reading Pack\n\n## PDF page 200\n\n"
+        "第16問 指針\n16-4\n答案例\n講師答案本文\n以上\n",
+        encoding="utf-8",
+    )
+    bridge = tmp_path / "LegalStudy_ChatBridge"
+    pending = bridge / "00_pending"
+    pending.mkdir(parents=True)
+
+    with pytest.raises(RuntimeError, match="material completeness"):
+        publish_run_to_bridge(run_dir=run, bridge_root=bridge)
+
+    assert list(pending.iterdir()) == []
+
+
 def test_existing_packet_with_different_content_is_not_accepted(tmp_path: Path) -> None:
     run = _write_run(tmp_path)
     bridge = tmp_path / "LegalStudy_ChatBridge"
     pending = bridge / "00_pending"
     pending.mkdir(parents=True)
     first = publish_run_to_bridge(run_dir=run, bridge_root=bridge)
-    (run / "criminal_16_handoff.md").write_text("changed", encoding="utf-8")
+    (run / "criminal_16_handoff.md").write_text(
+        "# Page Reading Pack\n\n## PDF page 200\n\n"
+        "第16問\n16-1\n次の事例について甲の罪責を論ぜよ。\n"
+        "答案例\n変更後の講師答案本文\n以上\n",
+        encoding="utf-8",
+    )
 
     with pytest.raises(RuntimeError, match="different"):
         publish_run_to_bridge(run_dir=run, bridge_root=bridge)
 
     assert len(list(pending.glob("*.chat_packet.zip"))) == 1
     with zipfile.ZipFile(first.packet_path) as archive:
-        assert archive.read("handoff.md").decode("utf-8") == "# Page Reading Pack\n"
+        original = archive.read("handoff.md").decode("utf-8")
+        assert "講師答案本文" in original
+        assert "変更後" not in original
 
 
 def test_partial_packet_is_not_treated_as_completed(tmp_path: Path) -> None:

@@ -78,7 +78,9 @@ def _run(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     (run / "criminal_12_handoff.md").write_text(
-        "# Page Reading Pack\n\n講師答案本文\n",
+        "# Page Reading Pack\n\n## PDF page 109\n\n"
+        "第12問\n12-1\n次の事例について甲の罪責を論ぜよ。\n"
+        "答案例\n講師答案本文\n以上\n",
         encoding="utf-8",
     )
     (run / "handoff_review/page-0109-review.png").write_bytes(b"png")

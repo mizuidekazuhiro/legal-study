@@ -53,7 +53,15 @@ class PacketReadyPipeline(FakePipeline):
         handoff = handoff_markdown_filename(
             prepared.manifest.subject, prepared.manifest.question
         )
-        (root / handoff).write_text("# Page Reading Pack\n", encoding="utf-8")
+        question = prepared.manifest.question
+        pages = "\n".join(f"## PDF page {page}" for page in selected)
+        (root / handoff).write_text(
+            f"# Page Reading Pack\n\n{pages}\n\n"
+            f"第{question}問\n{question}-1\n"
+            "次の事例について甲の罪責を論ぜよ。\n"
+            "答案例\n講師答案本文\n以上\n",
+            encoding="utf-8",
+        )
         review = root / "handoff_review"
         review.mkdir()
         for page in selected:
