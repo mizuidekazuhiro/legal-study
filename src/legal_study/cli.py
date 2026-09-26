@@ -189,7 +189,14 @@ def watch_study(
     ] = None,
 ) -> None:
     """Watch a study PDF, queue DONE questions, and ingest them serially."""
+    from legal_study.automation.watch_lock import WatchLock
+
     settings = LocalSettings()
+    try:
+        watch_lock = WatchLock(settings.home, "study", pdf)
+    except BlockingIOError:
+        console.print("Study watcher already running; duplicate skipped.")
+        return
     settings.ensure()
     engine = PaddleOcrEngine(model_root=settings.models_dir / "paddleocr")
     pipeline = PdfIngestPipeline(
@@ -237,6 +244,8 @@ def watch_study(
                 console.print(worker_result.model_dump_json())
     except KeyboardInterrupt:
         console.print("Stopped.")
+    finally:
+        watch_lock.close()
 
 
 @app.command("process-queue")
@@ -350,6 +359,14 @@ def watch_chat_bridge_command(
 ) -> None:
     """Watch Drive bridge commands and apply only explicitly authorized actions."""
 
+    from legal_study.automation.watch_lock import WatchLock
+
+    try:
+        watch_lock = WatchLock(LocalSettings().home, "bridge", bridge_root)
+    except BlockingIOError:
+        console.print("Bridge watcher already running; duplicate skipped.")
+        return
+
     registrar_factory = (
         (lambda: LegalQuestionBankRegistrar())
         if enable_notion
@@ -378,6 +395,8 @@ def watch_chat_bridge_command(
             console.print(result.model_dump_json())
     except KeyboardInterrupt:
         console.print("Stopped.")
+    finally:
+        watch_lock.close()
 
 
 @app.command("build-chat-packet")
