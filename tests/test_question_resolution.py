@@ -216,7 +216,10 @@ def test_problem_and_guidance_on_same_page_is_valid_start(tmp_path: Path) -> Non
     _question_pdf(pdf)
     engine = HeaderOcr(
         {
-            2: "第27問\n27-1\n次の事例について甲の罪責を論ぜよ。\n指針",
+            2: (
+                "第27問\n27-1\n次の事例について甲の罪責を論ぜよ。\n"
+                "指針\n(旧司法試験 昭和63年度第2問)"
+            ),
         }
     )
 
