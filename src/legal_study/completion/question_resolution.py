@@ -259,6 +259,7 @@ def apply_done_markers_to_snapshot(
     settings: LocalSettings | None = None,
     pages: list[int] | None = None,
     max_backtrack: int = 16,
+    resolved_questions: dict[int, QuestionResolution] | None = None,
 ) -> list[CompletionApplyResult]:
     """Apply DONE markers to an already immutable source snapshot."""
     cfg = settings or LocalSettings()
@@ -274,13 +275,15 @@ def apply_done_markers_to_snapshot(
     results: list[CompletionApplyResult] = []
 
     for detection in detected:
-        resolution = resolve_question_for_done_page(
-            snapshot.snapshot_path,
-            detection.page_number,
-            ocr_engine=ocr_engine,
-            temp_dir=cfg.temp_dir / "question_headers",
-            max_backtrack=max_backtrack,
-        )
+        resolution = (resolved_questions or {}).get(detection.page_number)
+        if resolution is None:
+            resolution = resolve_question_for_done_page(
+                snapshot.snapshot_path,
+                detection.page_number,
+                ocr_engine=ocr_engine,
+                temp_dir=cfg.temp_dir / "question_headers",
+                max_backtrack=max_backtrack,
+            )
         if not resolution.resolved or resolution.question is None or resolution.start_page is None:
             results.append(
                 CompletionApplyResult(

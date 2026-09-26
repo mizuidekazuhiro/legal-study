@@ -145,6 +145,7 @@ def reconcile_unregistered_done(
     if not detections:
         return [], []
     selected_pages: list[int] = []
+    resolutions = {}
     for detection in detections:
         resolution = resolve_question_for_done_page(
             snapshot.snapshot_path,
@@ -159,6 +160,7 @@ def reconcile_unregistered_done(
             and (allowed_questions is None or resolution.question in allowed_questions)
         ):
             selected_pages.append(detection.page_number)
+            resolutions[detection.page_number] = resolution
     if not selected_pages:
         return [item.page_number for item in detections], []
 
@@ -169,6 +171,7 @@ def reconcile_unregistered_done(
         settings=settings,
         pages=selected_pages,
         max_backtrack=max_backtrack,
+        resolved_questions=resolutions,
     )
     if include_revisions:
         page_index = ensure_source_page_index(snapshot, settings.cache_dir)
@@ -210,6 +213,7 @@ def reconcile_unregistered_done(
                 settings=settings,
                 pages=retry_pages,
                 max_backtrack=max_backtrack,
+                resolved_questions={page: resolutions[page] for page in retry_pages},
             )
     questions = _advance_and_queue_completions(
         completions,
