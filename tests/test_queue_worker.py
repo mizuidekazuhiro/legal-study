@@ -3,7 +3,9 @@ import json
 from pathlib import Path
 
 import pymupdf
+import pytest
 
+import legal_study.automation.worker as worker_module
 from legal_study.automation.queue import AutomationStateStore, WorkStatus
 from legal_study.automation.worker import process_next_work_item
 from legal_study.page_identity import ensure_source_page_index
@@ -78,6 +80,23 @@ class PacketReadyPipeline(FakePipeline):
             ),
             encoding="utf-8",
         )
+
+
+def test_prepare_run_transient_oserror_remains_retryable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings, _queue, _questions, _source_sha = _queue_question(tmp_path)
+    monkeypatch.setattr(
+        worker_module,
+        "prepare_run",
+        lambda **_kwargs: (_ for _ in ()).throw(PermissionError("temporary lock")),
+    )
+
+    result = process_next_work_item(pipeline=FakePipeline(), settings=settings)
+
+    assert result.reason == "INGEST_FAILED"
+    assert result.queue_status == WorkStatus.PENDING
 
 
 def _write_pdf(path: Path) -> None:

@@ -124,7 +124,7 @@ def _load_patterns(*, root: Path, subject: str) -> list[ObsidianArgumentPattern]
 
 
 def _frontmatter(text: str) -> dict[str, Any] | None:
-    normalized = text.lstrip("\ufeff")
+    normalized = text.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
     if not normalized.startswith("---\n"):
         return None
     end = normalized.find("\n---\n", 4)

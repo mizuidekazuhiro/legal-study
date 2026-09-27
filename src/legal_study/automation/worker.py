@@ -140,6 +140,7 @@ def process_next_work_item(
                 f"got {question.status.value}"
             )
 
+        retryable_failure = True
         pages = _resolve_stable_pages(
             stable_page_ids=item.stable_page_ids,
             source_page_numbers=item.source_page_numbers,
@@ -158,7 +159,6 @@ def process_next_work_item(
             pipeline_config=pipeline.input_config(),
             settings=cfg,
         )
-        retryable_failure = True
         pipeline.run(
             item.source_snapshot,
             prepared,

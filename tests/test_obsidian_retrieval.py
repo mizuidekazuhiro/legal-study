@@ -54,6 +54,21 @@ def test_search_reads_registered_pattern_without_opening_source_pdf(tmp_path) ->
     assert attempts[0].matched_ids == ["刑3"]
 
 
+def test_search_reads_crlf_frontmatter(tmp_path) -> None:
+    vault = tmp_path / "vault"
+    note = vault / "criminal-pattern.md"
+    vault.mkdir()
+    note.write_bytes(_PATTERN.replace("\n", "\r\n").encode("utf-8"))
+
+    patterns, _attempts = search_obsidian_argument_patterns(
+        vault_dir=vault,
+        queries=["刑3"],
+        subject="刑法",
+    )
+
+    assert [pattern.pattern_id for pattern in patterns] == ["刑3"]
+
+
 def test_search_ignores_non_pattern_and_other_subject(tmp_path) -> None:
     vault = tmp_path / "vault"
     vault.mkdir()

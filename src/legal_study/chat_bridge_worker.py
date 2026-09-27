@@ -369,8 +369,9 @@ def process_bridge_command(
     if command_file.suffix.lower() != ".json":
         raise ValueError("Bridge command must be JSON")
 
-    command_sha = file_sha256(command_file)
-    command = BridgeCommand.model_validate_json(command_file.read_text(encoding="utf-8"))
+    command_bytes = command_file.read_bytes()
+    command_sha = hashlib.sha256(command_bytes).hexdigest()
+    command = BridgeCommand.model_validate_json(command_bytes)
     receipt_path = layout.receipts / f"{command.command_id}.receipt.json"
     failed_path = layout.failed / f"{command.command_id}.receipt.json"
     state = BridgeStateStore(cfg.state_db)
