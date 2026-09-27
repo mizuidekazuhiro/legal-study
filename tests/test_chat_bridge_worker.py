@@ -567,6 +567,42 @@ def test_watcher_isolates_malformed_command(tmp_path: Path, monkeypatch) -> None
     assert Path(result.receipt_path or "").is_file()
 
 
+def test_watcher_tolerates_command_disappearing_before_stat(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = LocalSettings(home=tmp_path / "home")
+    bridge = tmp_path / "bridge"
+    for name in ("10_approved", "20_commands", "30_receipts", "99_failed"):
+        (bridge / name).mkdir(parents=True)
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    vanished = bridge / "20_commands" / "a-vanished.json"
+    vanished.write_text("{}", encoding="utf-8")
+    (bridge / "20_commands" / "z-broken.json").write_text("{", encoding="utf-8")
+    original_stat = Path.stat
+    disappeared = False
+
+    def disappearing_stat(path: Path, *args, **kwargs):
+        nonlocal disappeared
+        if path == vanished and not disappeared:
+            disappeared = True
+            path.unlink()
+            raise FileNotFoundError(path)
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", disappearing_stat)
+    monkeypatch.setattr(bridge_worker.time, "sleep", lambda _seconds: None)
+    watcher = watch_bridge_commands(
+        bridge_root=bridge,
+        obsidian_inbox=inbox,
+        settings=settings,
+        poll_interval_seconds=0.01,
+        stable_seconds=0,
+    )
+
+    assert next(watcher).status == "INVALID_COMMAND"
+
+
 def test_watcher_continues_to_later_command_after_malformed_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

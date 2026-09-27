@@ -7,12 +7,13 @@ from legal_study.automation.orchestrator import (
     process_pdf_update,
     reconcile_unregistered_done,
     recover_watch_startup,
+    revision_done_candidate_pages,
     watch_pdf_updates,
 )
-from legal_study.automation.queue import AutomationStateStore, WorkStatus
+from legal_study.automation.queue import AutomationStateStore, WorkItem, WorkStatus
 from legal_study.automation.watch_lock import WatchLock
 from legal_study.completion.done_marker import done_stamp_png_bytes
-from legal_study.page_identity import ensure_source_page_index
+from legal_study.page_identity import PageAlignment, PageAlignmentRecord, ensure_source_page_index
 from legal_study.pdf.ocr.base import OcrLine, OcrResult
 from legal_study.settings import LocalSettings
 from legal_study.source_store import snapshot_source
@@ -31,6 +32,44 @@ class HeaderOcr:
             confidence=0.99,
             lines=[OcrLine(text=text, confidence=0.99)],
         )
+
+
+def test_changed_earlier_page_rechecks_existing_done_page() -> None:
+    alignment = PageAlignment(
+        current_source_sha256="b" * 64,
+        previous_source_sha256="a" * 64,
+        logical_document_name="source.pdf",
+        records=[
+            PageAlignmentRecord(
+                previous_page=10,
+                current_page=10,
+                classification="MARKUP_CHANGED",
+            ),
+            PageAlignmentRecord(
+                previous_page=11,
+                current_page=11,
+                classification="SAME",
+            ),
+            PageAlignmentRecord(
+                previous_page=12,
+                current_page=12,
+                classification="SAME",
+            ),
+        ],
+    )
+    prior = WorkItem(
+        id=1,
+        subject="criminal",
+        question="22",
+        source_sha256="a" * 64,
+        stable_page_ids=["p10", "p11", "p12"],
+        source_page_numbers=[10, 11, 12],
+        status=WorkStatus.COMPLETED,
+        created_at="2026-09-27T00:00:00Z",
+        updated_at="2026-09-27T00:00:00Z",
+    )
+
+    assert revision_done_candidate_pages(alignment, [prior]) == [12]
 
 
 def test_watch_pdf_updates_yields_idle_ticks_for_queue_retries(

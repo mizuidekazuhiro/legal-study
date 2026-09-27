@@ -628,7 +628,11 @@ def watch_bridge_commands(
                 observations.pop(path, None)
 
         for path in present:
-            stat = path.stat()
+            try:
+                stat = path.stat()
+            except OSError:
+                observations.pop(path, None)
+                continue
             signature = (stat.st_size, stat.st_mtime_ns)
             previous = observations.get(path)
 

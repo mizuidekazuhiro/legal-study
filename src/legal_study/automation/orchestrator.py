@@ -7,7 +7,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 from legal_study.automation.file_watcher import FileUpdateEvent, FileUpdateWatcher
-from legal_study.automation.queue import AutomationStateStore, WorkStatus
+from legal_study.automation.queue import AutomationStateStore, WorkItem, WorkStatus
 from legal_study.automation.sync_stability import (
     SyncStabilityResult,
     mark_question_sync_stable_from_verified_hash,
@@ -280,6 +280,31 @@ def reconcile_unregistered_done(
     return [item.page_number for item in detections], questions
 
 
+def revision_done_candidate_pages(
+    alignment: PageAlignment, prior_items: list[WorkItem]
+) -> list[int]:
+    """Include an existing DONE page when any earlier page in its range changed."""
+    ignored = {"SAME", "MOVED"}
+    changed_previous = {
+        int(record.previous_page)
+        for record in alignment.records
+        if record.previous_page is not None and record.classification not in ignored
+    }
+    previous_to_current = {
+        int(record.previous_page): int(record.current_page)
+        for record in alignment.records
+        if record.previous_page is not None and record.current_page is not None
+    }
+    candidates: set[int] = set()
+    for item in prior_items:
+        pages = item.source_page_numbers
+        if pages and changed_previous.intersection(pages):
+            current_done_page = previous_to_current.get(max(pages))
+            if current_done_page is not None:
+                candidates.add(current_done_page)
+    return sorted(candidates)
+
+
 def establish_stable_baseline(
     pdf: str | Path,
     *,
@@ -354,6 +379,16 @@ def process_pdf_update(
     current_index = ensure_source_page_index(snapshot, cfg.cache_dir)
     alignment = align_page_indexes(previous_index, current_index)
     candidate_pages = changed_current_pages(alignment)
+    automation_state = AutomationStateStore(cfg.state_db)
+    candidate_pages = sorted(
+        set(candidate_pages)
+        | set(
+            revision_done_candidate_pages(
+                alignment,
+                automation_state.list_by_source(subject, previous_index.source_sha256),
+            )
+        )
+    )
 
     result = AutomationCycleResult(
         source_path=source_path,

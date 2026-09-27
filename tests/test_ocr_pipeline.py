@@ -580,7 +580,7 @@ def _write_shared_cache_pdf(path: Path, *, insert_front: bool, add_markup: bool)
     document.close()
 
 
-def test_shared_page_cache_reuses_ocr_after_page_move_and_markup_change(
+def test_shared_page_cache_reexecutes_ocr_when_rendered_markup_changes(
     tmp_path: Path,
 ) -> None:
     first_dir = tmp_path / "v1"
@@ -621,16 +621,12 @@ def test_shared_page_cache_reuses_ocr_after_page_move_and_markup_change(
     )
     second_pipeline.run(second_snapshot, second_prepared, pages=[2])
 
-    assert second_engine.calls == 0
+    assert second_engine.calls == 1
     ocr_payload = json.loads(
         (second_prepared.output_dir / "ocr.json").read_text(encoding="utf-8")
     )
-    assert ocr_payload["checkpoint"]["reused_targets"] == 1
-    assert ocr_payload["checkpoint"]["executed_targets"] == 0
-    evidence = ocr_payload["pages"]["2"]["full_page"]
-    assert evidence["cache"]["scope"] == "shared_page"
-    assert evidence["cache"]["reused"] is True
-
+    assert ocr_payload["checkpoint"]["reused_targets"] == 0
+    assert ocr_payload["checkpoint"]["executed_targets"] == 1
     alignment = json.loads(
         (second_prepared.output_dir / "page_alignment.json").read_text(encoding="utf-8")
     )

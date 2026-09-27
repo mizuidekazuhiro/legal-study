@@ -272,6 +272,18 @@ class AutomationStateStore:
             ).fetchall()
         return [self._work_item(row) for row in rows]
 
+    def list_by_source(self, subject: str, source_sha256: str) -> list[WorkItem]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM automation_work_queue
+                WHERE subject = ? AND source_sha256 = ?
+                ORDER BY id
+                """,
+                (subject, source_sha256),
+            ).fetchall()
+        return [self._work_item(row) for row in rows]
+
     def claim_next(self) -> WorkItem | None:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")

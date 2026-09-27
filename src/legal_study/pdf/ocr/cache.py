@@ -45,6 +45,8 @@ def canonical_target_signature(target: dict[str, object]) -> dict[str, object]:
         signature["native_bbox"] = _rounded_bbox(target.get("native_bbox"))
     if target.get("source_image_digest") is not None:
         signature["source_image_digest"] = str(target["source_image_digest"])
+    if target.get("image_sha256") is not None:
+        signature["image_sha256"] = str(target["image_sha256"])
     return signature
 
 
