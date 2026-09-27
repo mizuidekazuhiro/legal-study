@@ -1,0 +1,940 @@
+from __future__ import annotations
+
+import importlib.util
+import json
+import platform
+from pathlib import Path
+from typing import Annotated
+
+import typer
+from rich.console import Console
+from rich.table import Table
+
+from legal_study.automation.file_watcher import iter_file_updates
+from legal_study.automation.orchestrator import watch_pdf_updates
+from legal_study.automation.sync_stability import mark_question_sync_stable
+from legal_study.automation.worker import drain_pending_work, process_next_work_item
+from legal_study.chat_bridge_publish import publish_run_to_bridge
+from legal_study.chat_bridge_worker import watch_bridge_commands
+from legal_study.chat_packet import build_chat_packet
+from legal_study.chat_result import apply_chat_result, validate_chat_result
+from legal_study.completion.done_marker import detect_done_markers, save_done_stamp
+from legal_study.completion.question_resolution import apply_done_markers
+from legal_study.finalize import finalize_existing_run
+from legal_study.io_utils import atomic_write_text
+from legal_study.notion_registration import LegalQuestionBankRegistrar
+from legal_study.openai_poc import (
+    OpenAIPocConfig,
+    build_study_draft_bundle_from_run,
+    run_openai_study_draft_poc,
+)
+from legal_study.page_identity import (
+    align_page_indexes,
+    ensure_source_page_index,
+    load_source_page_index,
+)
+from legal_study.pdf.inspector import PdfInspector
+from legal_study.pdf.ocr.cache import seed_shared_ocr_cache_from_run
+from legal_study.pdf.ocr.paddle import (
+    PaddleOcrEngine,
+    inspect_paddle_installation,
+    warmup_paddle_models,
+)
+from legal_study.pdf.ocr.routing import OcrRoutingConfig
+from legal_study.pdf.pipeline import PdfIngestPipeline
+from legal_study.problem_packet import handoff_markdown_filename
+from legal_study.provenance import resolve_code_revision
+from legal_study.run_manifest import calculate_pipeline_config_hash, prepare_run
+from legal_study.settings import LocalSettings
+from legal_study.source_store import snapshot_source
+
+app = typer.Typer(no_args_is_help=True)
+console = Console()
+
+
+def _parse_pages(value: str | None) -> list[int] | None:
+    if not value:
+        return None
+    pages: set[int] = set()
+    for part in value.split(","):
+        part = part.strip()
+        if "-" in part:
+            start, end = [int(x) for x in part.split("-", 1)]
+            if start < 1 or end < 1 or start > end:
+                raise typer.BadParameter(
+                    f"Page range must be positive and ascending: {part}"
+                )
+            pages.update(range(start, end + 1))
+        else:
+            page = int(part)
+            if page < 1:
+                raise typer.BadParameter(f"Page number must be positive: {part}")
+            pages.add(page)
+    return sorted(pages)
+
+
+@app.command("make-done-stamp")
+def make_done_stamp(
+    output: Annotated[Path, typer.Argument(help="PNG path to create.")],
+) -> None:
+    """Create the canonical Goodnotes DONE stamp PNG."""
+    digest = save_done_stamp(output)
+    console.print(
+        json.dumps(
+            {
+                "output": str(output.expanduser().resolve()),
+                "sha256": digest,
+                "stamp_version": "LEGAL-STUDY-DONE-V1",
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+
+@app.command("detect-done")
+def detect_done(
+    pdf: Annotated[Path, typer.Argument(exists=True, readable=True)],
+    pages: Annotated[
+        str | None,
+        typer.Option(help="1-based pages, e.g. 110-116,120"),
+    ] = None,
+) -> None:
+    """Detect the canonical DONE stamp on selected PDF pages."""
+    results = detect_done_markers(pdf, pages=_parse_pages(pages))
+    console.print(
+        json.dumps(
+            {
+                "pdf": str(pdf),
+                "detected_pages": [
+                    item.page_number for item in results if item.detected
+                ],
+                "results": [item.model_dump(mode="json") for item in results],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+
+@app.command("apply-done")
+def apply_done(
+    pdf: Annotated[Path, typer.Argument(exists=True, readable=True)],
+    subject: Annotated[str, typer.Option(help="Subject key, e.g. criminal")] = "criminal",
+    pages: Annotated[
+        str | None,
+        typer.Option(help="1-based pages to inspect for DONE, e.g. 165 or 160-166"),
+    ] = None,
+    max_backtrack: Annotated[
+        int,
+        typer.Option(help="Maximum pages to scan backward for the nearest 第N問 header."),
+    ] = 16,
+    ocr: Annotated[str, typer.Option(help="Question-header OCR backend; currently paddle")] = "paddle",
+) -> None:
+    """Resolve detected DONE stamps to questions and persist DONE_DETECTED state."""
+    settings = LocalSettings()
+    settings.ensure()
+    if ocr != "paddle":
+        raise typer.BadParameter("ocr must be 'paddle' for apply-done")
+    engine = PaddleOcrEngine(model_root=settings.models_dir / "paddleocr")
+    results = apply_done_markers(
+        pdf,
+        subject=subject,
+        ocr_engine=engine,
+        settings=settings,
+        pages=_parse_pages(pages),
+        max_backtrack=max_backtrack,
+    )
+    console.print(
+        json.dumps(
+            {
+                "source": str(pdf),
+                "subject": subject,
+                "detected_count": len(results),
+                "results": [item.model_dump(mode="json") for item in results],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+
+@app.command("watch-study")
+def watch_study(
+    pdf: Annotated[Path, typer.Argument(exists=True, readable=True)],
+    subject: Annotated[str, typer.Option(help="Subject key, e.g. criminal")] = "criminal",
+    poll_interval_seconds: Annotated[
+        float,
+        typer.Option(help="Idle poll interval in seconds. Default is one minute."),
+    ] = 60.0,
+    stability_interval_seconds: Annotated[
+        float,
+        typer.Option(help="Seconds between active stability checks after an update."),
+    ] = 5.0,
+    stability_equal_observations: Annotated[
+        int,
+        typer.Option(help="Equal metadata observations required before hash verification."),
+    ] = 3,
+    stability_timeout_seconds: Annotated[
+        float,
+        typer.Option(help="Maximum seconds to wait for a stable updated PDF."),
+    ] = 90.0,
+    max_backtrack: Annotated[
+        int,
+        typer.Option(help="Maximum pages to scan backward for the nearest 第N問 header."),
+    ] = 16,
+    bridge_root: Annotated[
+        Path | None,
+        typer.Option(
+            "--bridge-root",
+            envvar="LEGAL_STUDY_CHAT_BRIDGE_ROOT",
+            help=(
+                "Existing Drive-synced LegalStudy_ChatBridge root. "
+                "Completed runs are published to 00_pending."
+            ),
+        ),
+    ] = None,
+) -> None:
+    """Watch a study PDF, queue DONE questions, and ingest them serially."""
+    from legal_study.automation.watch_lock import WatchLock
+
+    settings = LocalSettings()
+    try:
+        watch_lock = WatchLock(settings.home, "study", pdf)
+    except BlockingIOError:
+        console.print("Study watcher already running; duplicate skipped.")
+        return
+    settings.ensure()
+    engine = PaddleOcrEngine(model_root=settings.models_dir / "paddleocr")
+    pipeline = PdfIngestPipeline(
+        ocr_engine=engine,
+        routing_config=OcrRoutingConfig(),
+    )
+    pipeline_config = pipeline.input_config()
+    revision = resolve_code_revision()
+    console.print(
+        json.dumps(
+            {
+                "watching": str(pdf.expanduser().resolve()),
+                "subject": subject,
+                "poll_interval_seconds": poll_interval_seconds,
+                "stability_interval_seconds": stability_interval_seconds,
+                "code_revision": revision.sha,
+                "code_revision_source": revision.source,
+                "code_dirty": revision.dirty,
+                "pipeline_version": pipeline_config["pipeline_version"],
+                "pipeline_config_sha256": calculate_pipeline_config_hash(
+                    pipeline_config
+                ),
+            },
+            ensure_ascii=False,
+        )
+    )
+    try:
+        for result in watch_pdf_updates(
+            pdf,
+            subject=subject,
+            ocr_engine=engine,
+            settings=settings,
+            poll_interval_seconds=poll_interval_seconds,
+            stability_interval_seconds=stability_interval_seconds,
+            stability_equal_observations=stability_equal_observations,
+            stability_timeout_seconds=stability_timeout_seconds,
+            max_backtrack=max_backtrack,
+            yield_idle=True,
+        ):
+            if result.reason != "WATCH_IDLE":
+                console.print(result.model_dump_json())
+            for worker_result in drain_pending_work(
+                pipeline=pipeline,
+                settings=settings,
+                bridge_root=bridge_root,
+            ):
+                console.print(worker_result.model_dump_json())
+    except KeyboardInterrupt:
+        console.print("Stopped.")
+    finally:
+        watch_lock.close()
+
+
+@app.command("process-queue")
+def process_queue(
+    once: Annotated[
+        bool,
+        typer.Option(help="Process at most one pending question."),
+    ] = False,
+    bridge_root: Annotated[
+        Path | None,
+        typer.Option(
+            "--bridge-root",
+            envvar="LEGAL_STUDY_CHAT_BRIDGE_ROOT",
+            help="Optional Drive-synced LegalStudy_ChatBridge root.",
+        ),
+    ] = None,
+) -> None:
+    """Run pending PDF-ingest work serially from the persistent queue."""
+    settings = LocalSettings()
+    settings.ensure()
+    engine = PaddleOcrEngine(model_root=settings.models_dir / "paddleocr")
+    pipeline = PdfIngestPipeline(
+        ocr_engine=engine,
+        routing_config=OcrRoutingConfig(),
+    )
+    if once:
+        result = process_next_work_item(
+            pipeline=pipeline,
+            settings=settings,
+            bridge_root=bridge_root,
+        )
+        console.print(result.model_dump_json())
+        return
+    for result in drain_pending_work(
+        pipeline=pipeline,
+        settings=settings,
+        bridge_root=bridge_root,
+    ):
+        console.print(result.model_dump_json())
+
+
+@app.command("publish-chat-packet")
+def publish_chat_packet_command(
+    run_dir: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=False, readable=True),
+    ],
+    bridge_root: Annotated[
+        Path,
+        typer.Option(
+            "--bridge-root",
+            envvar="LEGAL_STUDY_CHAT_BRIDGE_ROOT",
+            exists=True,
+            file_okay=False,
+            readable=True,
+            help="Existing Drive-synced LegalStudy_ChatBridge root.",
+        ),
+    ],
+) -> None:
+    """Publish one completed run into the bridge 00_pending folder."""
+
+    result = publish_run_to_bridge(
+        run_dir=run_dir,
+        bridge_root=bridge_root,
+    )
+    console.print(result.model_dump_json(indent=2))
+
+
+@app.command("watch-chat-bridge")
+def watch_chat_bridge_command(
+    bridge_root: Annotated[
+        Path,
+        typer.Option(
+            "--bridge-root",
+            envvar="LEGAL_STUDY_CHAT_BRIDGE_ROOT",
+            exists=True,
+            file_okay=False,
+            readable=True,
+            help="Drive-synced LegalStudy_ChatBridge root.",
+        ),
+    ],
+    obsidian_inbox: Annotated[
+        Path,
+        typer.Option(
+            "--obsidian-inbox",
+            envvar="LEGAL_STUDY_OBSIDIAN_INBOX",
+            exists=True,
+            file_okay=False,
+            readable=True,
+            help="Existing local Google Drive Obsidian_Inbox root.",
+        ),
+    ],
+    enable_notion: Annotated[
+        bool,
+        typer.Option(
+            "--enable-notion",
+            help=(
+                "Allow explicit register_notion/apply_all commands to use the "
+                "configured Legal Question Bank API credentials."
+            ),
+        ),
+    ] = False,
+    poll_interval_seconds: Annotated[
+        float,
+        typer.Option(help="Seconds between command-folder scans."),
+    ] = 5.0,
+    stable_seconds: Annotated[
+        float,
+        typer.Option(help="Seconds a synced command file must remain unchanged."),
+    ] = 3.0,
+) -> None:
+    """Watch Drive bridge commands and apply only explicitly authorized actions."""
+
+    from legal_study.automation.watch_lock import WatchLock
+
+    try:
+        watch_lock = WatchLock(LocalSettings().home, "bridge", bridge_root)
+    except BlockingIOError:
+        console.print("Bridge watcher already running; duplicate skipped.")
+        return
+
+    registrar_factory = (
+        (lambda: LegalQuestionBankRegistrar())
+        if enable_notion
+        else None
+    )
+    console.print(
+        json.dumps(
+            {
+                "bridge_root": str(bridge_root.expanduser().resolve()),
+                "obsidian_inbox": str(obsidian_inbox.expanduser().resolve()),
+                "enable_notion": enable_notion,
+                "poll_interval_seconds": poll_interval_seconds,
+                "stable_seconds": stable_seconds,
+            },
+            ensure_ascii=False,
+        )
+    )
+    try:
+        for result in watch_bridge_commands(
+            bridge_root=bridge_root,
+            obsidian_inbox=obsidian_inbox,
+            notion_registrar_factory=registrar_factory,
+            poll_interval_seconds=poll_interval_seconds,
+            stable_seconds=stable_seconds,
+        ):
+            console.print(result.model_dump_json())
+    except KeyboardInterrupt:
+        console.print("Stopped.")
+    finally:
+        watch_lock.close()
+
+
+@app.command("build-chat-packet")
+def build_chat_packet_command(
+    run_dir: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=False, readable=True),
+    ],
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", "-o", help="Optional output ZIP path."),
+    ] = None,
+    supplemental: Annotated[
+        Path | None,
+        typer.Option(
+            "--supplemental",
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            help="Optional supplemental_retrieval.json path. Defaults to the run directory.",
+        ),
+    ] = None,
+) -> None:
+    """Create the compact ZIP handed to the ChatGPT Project. No OpenAI API call."""
+
+    result = build_chat_packet(
+        run_dir=run_dir,
+        output_path=output,
+        supplemental_path=supplemental,
+    )
+    console.print(result.model_dump_json(indent=2))
+
+
+@app.command("apply-chat-result")
+def apply_chat_result_command(
+    result_json: Annotated[
+        Path,
+        typer.Argument(exists=True, dir_okay=False, readable=True),
+    ],
+    run_dir: Annotated[
+        Path,
+        typer.Option("--run-dir", exists=True, file_okay=False, readable=True),
+    ],
+    obsidian_inbox: Annotated[
+        Path | None,
+        typer.Option(
+            "--obsidian-inbox",
+            help=(
+                "Optional existing Obsidian_Inbox root. If omitted, only local "
+                "validated artifacts are materialized in the run directory."
+            ),
+        ),
+    ] = None,
+    update_existing: Annotated[
+        bool,
+        typer.Option(
+            "--update-existing",
+            help="Allow replacement of a differing existing Inbox note.",
+        ),
+    ] = False,
+) -> None:
+    """Apply a validated ChatGPT result locally. Never mutates Notion."""
+
+    result = apply_chat_result(
+        result_path=result_json,
+        run_dir=run_dir,
+        obsidian_inbox=obsidian_inbox,
+        update_existing=update_existing,
+    )
+    console.print(result.model_dump_json(indent=2))
+
+
+@app.command("validate-chat-result")
+def validate_chat_result_command(
+    result_json: Annotated[
+        Path,
+        typer.Argument(exists=True, dir_okay=False, readable=True),
+    ],
+    run_dir: Annotated[
+        Path,
+        typer.Option("--run-dir", exists=True, file_okay=False, readable=True),
+    ],
+) -> None:
+    """Validate a ChatGPT Project result against the exact local source run."""
+
+    report = validate_chat_result(
+        result_path=result_json,
+        run_dir=run_dir,
+    )
+    console.print(report.model_dump_json(indent=2))
+    if not report.valid:
+        raise typer.Exit(code=1)
+
+
+@app.command("generate-study-draft-poc")
+def generate_study_draft_poc(
+    run_dir: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=False, readable=True),
+    ],
+    instruction_dir: Annotated[
+        Path,
+        typer.Option(
+            "--instruction-dir",
+            exists=True,
+            file_okay=False,
+            readable=True,
+            help="Directory containing the governing project instruction Markdown files.",
+        ),
+    ],
+    model: Annotated[
+        str,
+        typer.Option(help="OpenAI model ID for the one-question PoC."),
+    ] = "gpt-5.6",
+    reasoning_effort: Annotated[
+        str,
+        typer.Option(help="none|low|medium|high|xhigh|max"),
+    ] = "high",
+    reasoning_mode: Annotated[
+        str,
+        typer.Option(help="standard|pro"),
+    ] = "standard",
+    image_detail: Annotated[
+        str,
+        typer.Option(help="low|high|original|auto"),
+    ] = "original",
+    max_output_tokens: Annotated[
+        int,
+        typer.Option(help="Maximum model output tokens for the structured draft."),
+    ] = 64000,
+) -> None:
+    """Call OpenAI once for one ingest run and validate the returned study draft.
+
+    Requires the optional API dependency and OPENAI_API_KEY. This command does
+    not update queue/question state, Anki, Obsidian Inbox, or Notion.
+    """
+
+    try:
+        config = OpenAIPocConfig(
+            model=model,
+            reasoning_effort=reasoning_effort,
+            reasoning_mode=reasoning_mode,
+            image_detail=image_detail,
+            max_output_tokens=max_output_tokens,
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    settings = LocalSettings()
+    settings.ensure()
+    bundle = build_study_draft_bundle_from_run(
+        run_dir=run_dir,
+        instruction_dir=instruction_dir,
+        settings=settings,
+    )
+    result = run_openai_study_draft_poc(
+        bundle=bundle,
+        run_dir=run_dir,
+        config=config,
+    )
+    console.print(result.model_dump_json(indent=2))
+
+
+@app.command("watch-file")
+def watch_file(
+    pdf: Annotated[Path, typer.Argument(exists=True, readable=True)],
+    poll_interval_seconds: Annotated[
+        float,
+        typer.Option(help="Seconds between cheap file metadata polls."),
+    ] = 60.0,
+) -> None:
+    """Watch a Drive-synced PDF and emit one JSON object for each detected update."""
+    console.print(
+        json.dumps(
+            {
+                "watching": str(pdf.expanduser().resolve()),
+                "poll_interval_seconds": poll_interval_seconds,
+            },
+            ensure_ascii=False,
+        )
+    )
+    try:
+        for event in iter_file_updates(
+            pdf,
+            poll_interval_seconds=poll_interval_seconds,
+        ):
+            console.print(event.model_dump_json())
+    except KeyboardInterrupt:
+        console.print("Stopped.")
+
+
+@app.command("check-sync-stable")
+def check_sync_stable(
+    pdf: Annotated[Path, typer.Argument(exists=True, readable=True)],
+    subject: Annotated[str, typer.Option(help="Subject key, e.g. criminal")] = "criminal",
+    question: Annotated[str, typer.Option(help="Question number already in DONE_DETECTED state")] = "",
+    interval_seconds: Annotated[
+        float,
+        typer.Option(help="Seconds between stability probes."),
+    ] = 5.0,
+    required_equal_observations: Annotated[
+        int,
+        typer.Option(help="Equal size/mtime observations required before hash verification."),
+    ] = 3,
+    timeout_seconds: Annotated[
+        float,
+        typer.Option(help="Maximum seconds to wait before leaving the state unchanged."),
+    ] = 90.0,
+) -> None:
+    """Advance DONE_DETECTED to SYNC_STABLE only after source stability verification."""
+    if not question.strip():
+        raise typer.BadParameter("--question is required")
+    settings = LocalSettings()
+    settings.ensure()
+    result = mark_question_sync_stable(
+        pdf,
+        subject=subject,
+        question=question.strip(),
+        settings=settings,
+        interval_seconds=interval_seconds,
+        required_equal_observations=required_equal_observations,
+        timeout_seconds=timeout_seconds,
+    )
+    console.print(json.dumps(result.model_dump(mode="json"), ensure_ascii=False, indent=2))
+
+
+@app.command()
+def init() -> None:
+    """Create the portable local workspace."""
+    settings = LocalSettings()
+    settings.ensure()
+    console.print(f"LEGAL_STUDY_HOME: {settings.home}")
+    console.print(f"runs:   {settings.runs_dir}")
+    console.print(f"cache:  {settings.cache_dir}")
+    console.print(f"models: {settings.models_dir}")
+    console.print("Initialized.")
+
+
+@app.command()
+def doctor(
+    ocr: Annotated[
+        bool,
+        typer.Option("--ocr", help="Verify offline Paddle packages, models, and hashes."),
+    ] = False,
+) -> None:
+    """Check whether the core local-only PDF pipeline can run."""
+    settings = LocalSettings()
+    checks = {
+        "Python": platform.python_version(),
+        "Platform": platform.platform(),
+        "Workspace": str(settings.home),
+        "PyMuPDF": "OK" if importlib.util.find_spec("pymupdf") else "MISSING",
+        "Pillow": "OK" if importlib.util.find_spec("PIL") else "MISSING",
+        "PaddleOCR": (
+            "installed" if importlib.util.find_spec("paddleocr") else "optional/not installed"
+        ),
+    }
+    table = Table("Check", "Value")
+    for key, value in checks.items():
+        table.add_row(key, value)
+    console.print(table)
+    console.print(
+        "Core inspect/ingest works locally without cloud services. "
+        "PaddleOCR is optional and may require a separate Paddle runtime."
+    )
+    if ocr:
+        status = inspect_paddle_installation(settings.models_dir / "paddleocr")
+        console.print_json(data=status)
+        if status["ready"]:
+            console.print("Offline PaddleOCR: READY (CPU)")
+        else:
+            console.print(
+                "Offline PaddleOCR: NOT READY. Install the OCR extra and run "
+                "`legal-study warmup-ocr` once while online."
+            )
+            raise typer.Exit(code=1)
+
+
+@app.command("warmup-ocr")
+def warmup_ocr() -> None:
+    """Explicitly download and hash PaddleOCR models for later offline CPU use."""
+    settings = LocalSettings()
+    settings.ensure()
+    console.print("Preparing PaddleOCR CPU models; this command may use the network...")
+    status = warmup_paddle_models(settings.models_dir / "paddleocr")
+    console.print_json(data=status)
+    if not status["ready"]:
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def inspect(
+    pdf: Annotated[Path, typer.Argument(exists=True, readable=True)],
+    pages: Annotated[str | None, typer.Option(help="1-based pages, e.g. 110-116,120")] = None,
+    render_dir: Annotated[Path | None, typer.Option()] = None,
+    json_output: Annotated[Path | None, typer.Option()] = None,
+) -> None:
+    settings = LocalSettings()
+    snapshot = snapshot_source(pdf, settings=settings)
+    result = PdfInspector().inspect(
+        snapshot.snapshot_path, pages=_parse_pages(pages), render_dir=render_dir
+    )
+    if json_output:
+        atomic_write_text(json_output, result.model_dump_json(indent=2) + "\n")
+
+    table = Table(
+        "Page", "Mode", "Chars", "TextQ", "Largest image", "Marks", "OCR", "Vision"
+    )
+    for page in result.pages:
+        table.add_row(
+            str(page.page_number),
+            page.mode.value,
+            str(page.native_char_count),
+            f"{page.native_quality_score:.2f}",
+            f"{page.largest_image_coverage:.0%}",
+            str(len(page.vector_marks)),
+            "YES" if page.ocr_recommended else "no",
+            "YES" if page.vision_review_recommended else "no",
+        )
+    console.print(table)
+    console.print(f"SHA256: {result.sha256}")
+
+
+@app.command()
+def finalize(
+    run_dir: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=False, readable=True),
+    ],
+) -> None:
+    """Create reconciliation/canonical/problem Markdown from an existing P1-B run."""
+    result = finalize_existing_run(run_dir)
+    console.print(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+@app.command("diff-source")
+def diff_source(
+    pdf: Annotated[Path, typer.Argument(exists=True, readable=True)],
+    against_run: Annotated[
+        Path,
+        typer.Option(
+            "--against-run",
+            exists=True,
+            file_okay=False,
+            readable=True,
+            help="Completed historical run whose source/page range is the baseline.",
+        ),
+    ],
+) -> None:
+    """Compare a new PDF version with the exact source used by a historical run."""
+    settings = LocalSettings()
+    settings.ensure()
+    manifest_path = against_run.expanduser().resolve() / "run_manifest.json"
+    if not manifest_path.is_file():
+        raise typer.BadParameter(f"run_manifest.json not found: {against_run}")
+    from legal_study.run_manifest import RunManifest
+
+    manifest = RunManifest.model_validate_json(
+        manifest_path.read_text(encoding="utf-8")
+    )
+    snapshot = snapshot_source(pdf, settings=settings)
+    current = ensure_source_page_index(snapshot, settings.cache_dir)
+    previous = load_source_page_index(
+        settings.cache_dir,
+        manifest.source.sha256,
+    )
+    alignment = align_page_indexes(previous, current)
+
+    requested = set(
+        manifest.requested_pages
+        if manifest.requested_pages is not None
+        else range(1, previous.page_count + 1)
+    )
+    relevant = [
+        item
+        for item in alignment.records
+        if item.previous_page in requested
+    ]
+    current_pages = sorted(
+        int(item.current_page)
+        for item in relevant
+        if item.current_page is not None
+    )
+    reusable = [
+        int(item.current_page)
+        for item in relevant
+        if item.current_page is not None and item.safe_for_base_ocr_reuse
+    ]
+    console.print(
+        json.dumps(
+            {
+                "baseline_run_id": manifest.run_id,
+                "baseline_source_sha256": manifest.source.sha256,
+                "current_source_sha256": snapshot.sha256,
+                "baseline_page_count": previous.page_count,
+                "current_page_count": current.page_count,
+                "requested_baseline_pages": manifest.requested_pages,
+                "suggested_current_pages": current_pages,
+                "safe_for_base_ocr_reuse_pages": sorted(reusable),
+                "alignment_counts": alignment.counts,
+                "requested_page_alignment": [
+                    item.model_dump(mode="json") for item in relevant
+                ],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+
+@app.command("seed-ocr-cache")
+def seed_ocr_cache(
+    run_dir: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=False, readable=True),
+    ],
+) -> None:
+    """Seed cross-version OCR cache from a completed historical run."""
+    settings = LocalSettings()
+    settings.ensure()
+    result = seed_shared_ocr_cache_from_run(
+        run_dir,
+        settings.cache_dir,
+        state_db=settings.state_db,
+    )
+    console.print(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+@app.command()
+def ingest(
+    pdf: Annotated[Path, typer.Argument(exists=True, readable=True)],
+    output_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--output", "-o", help="Optional; defaults to the portable local workspace."
+        ),
+    ] = None,
+    pages: Annotated[str | None, typer.Option(help="1-based pages, e.g. 110-116")] = None,
+    ocr: Annotated[str, typer.Option(help="none|paddle")] = "none",
+    full_page_dpi: Annotated[
+        int, typer.Option(help="Full-page OCR render DPI: 300, 450, or 600.")
+    ] = 300,
+    image_region_dpi: Annotated[
+        int, typer.Option(help="Embedded-image OCR crop DPI: 300, 450, or 600.")
+    ] = 300,
+    surgical_dpi: Annotated[
+        int, typer.Option(help="Surgical OCR crop DPI: 300, 450, or 600.")
+    ] = 450,
+    subject: Annotated[str, typer.Option(help="Used for default run directory")] = "unknown",
+    question: Annotated[str, typer.Option(help="Used for default run directory")] = "adhoc",
+) -> None:
+    parsed_pages = _parse_pages(pages)
+    settings = LocalSettings()
+    snapshot = snapshot_source(pdf, settings=settings)
+    try:
+        routing = OcrRoutingConfig(
+            full_page_dpi=full_page_dpi,
+            image_region_dpi=image_region_dpi,
+            surgical_dpi=surgical_dpi,
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    engine = None
+    if ocr == "paddle":
+        engine = PaddleOcrEngine(model_root=settings.models_dir / "paddleocr")
+    elif ocr != "none":
+        raise typer.BadParameter("ocr must be 'none' or 'paddle'")
+
+    pipeline = PdfIngestPipeline(
+        inspector=PdfInspector(render_dpi=full_page_dpi),
+        ocr_engine=engine,
+        routing_config=routing,
+    )
+    prepared = prepare_run(
+        snapshot=snapshot,
+        subject=subject,
+        question=question,
+        pages=parsed_pages,
+        pipeline_config=pipeline.input_config(),
+        output_dir=output_dir,
+        settings=settings,
+    )
+    result = pipeline.run(snapshot, prepared, pages=parsed_pages)
+    problem_markdown = next(prepared.output_dir.glob("*_problem.md"), None)
+    validation_path = prepared.output_dir / "problem_validation.json"
+    validation = (
+        json.loads(validation_path.read_text(encoding="utf-8"))
+        if validation_path.is_file()
+        else None
+    )
+    console.print(
+        json.dumps(
+            {
+                "run_id": prepared.manifest.run_id,
+                "output_dir": str(prepared.output_dir),
+                "source_sha256": snapshot.sha256,
+                "pages": len(result.pages),
+                "ocr_recommended": [p.page_number for p in result.pages if p.ocr_recommended],
+                "vision_review": [
+                    p.page_number for p in result.pages if p.vision_review_recommended
+                ],
+                "problem_markdown": (
+                    problem_markdown.name if problem_markdown is not None else None
+                ),
+                "handoff_markdown": (
+                    handoff_markdown_filename(
+                        prepared.manifest.subject,
+                        prepared.manifest.question,
+                    )
+                    if (
+                        prepared.output_dir
+                        / handoff_markdown_filename(
+                            prepared.manifest.subject,
+                            prepared.manifest.question,
+                        )
+                    ).is_file()
+                    else None
+                ),
+                "canonical_source": (
+                    "canonical_source.json"
+                    if (prepared.output_dir / "canonical_source.json").is_file()
+                    else None
+                ),
+                "needs_review_count": (
+                    validation.get("needs_review_count") if validation else None
+                ),
+                "problem_packet_valid": validation.get("valid") if validation else None,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
