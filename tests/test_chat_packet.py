@@ -8,7 +8,10 @@ import pytest
 from legal_study.chat_bridge_worker import BridgeAction, BridgeCommand
 from legal_study.chat_contract import command_filename
 from legal_study.chat_packet import _chat_instructions, build_chat_packet
-from legal_study.chat_packet_validation import validate_chat_packet_structure
+from legal_study.chat_packet_validation import (
+    validate_chat_packet_structure,
+    validate_material_completeness,
+)
 from legal_study.chat_result import ChatStudyResult
 
 
@@ -127,6 +130,27 @@ def _run(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     return run
+
+
+def test_material_validation_does_not_confuse_page_1_with_page_10(
+    tmp_path: Path,
+) -> None:
+    run = _run(tmp_path)
+    manifest_path = run / "run_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["requested_pages"] = [1, 10]
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    (run / "criminal_12_handoff.md").write_text(
+        "## PDF page 10\n\n第12問\n12-1\n次の事例の罪責を論ぜよ。\n答案例\n本文\n以上\n",
+        encoding="utf-8",
+    )
+    (run / "handoff_review/page-0001-review.png").write_bytes(b"png")
+    (run / "handoff_review/page-0010-review.png").write_bytes(b"png")
+
+    result = validate_material_completeness(run)
+
+    assert result["text_pages"] == [10]
+    assert result["checks"]["requested_page_text_present"] is False
 
 
 def test_build_chat_packet_is_compact_and_project_instruction_free(tmp_path: Path) -> None:

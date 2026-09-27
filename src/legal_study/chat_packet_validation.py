@@ -17,6 +17,15 @@ _ANSWER_START = ("答案例", "講師答案")
 _ANSWER_END = ("以上", "総括")
 
 
+def _handoff_page_headings(text: str) -> set[int]:
+    """Return page numbers from complete level-two handoff headings only."""
+    return {
+        int(match.group(1))
+        for line in text.splitlines()
+        if (match := re.fullmatch(r"\s*##\s+PDF page\s+(\d+)\s*", line))
+    }
+
+
 def validate_material_completeness(run_dir: Path) -> dict[str, Any]:
     root = run_dir.expanduser().resolve()
     manifest = RunManifest.model_validate_json(
@@ -56,7 +65,8 @@ def validate_material_completeness(run_dir: Path) -> dict[str, Any]:
     )
     answer_end_offset = max(normalized.rfind(value) for value in _ANSWER_END)
     requested = list(manifest.requested_pages or [])
-    text_pages = [page for page in requested if f"## PDF page {page}" in normalized]
+    handoff_pages = _handoff_page_headings(normalized)
+    text_pages = [page for page in requested if page in handoff_pages]
     image_pages = [
         page
         for page in requested
@@ -276,9 +286,8 @@ def validate_chat_packet_structure(packet: Path) -> dict[str, Any]:
                 "marker_count_matches_manifest": marker_count_matches_manifest,
                 "review_pages_match_manifest": expected_reviews
                 == {name for name in names if name.startswith("review/")},
-                "handoff_pages_match_manifest": all(
-                    f"## PDF page {page}" in handoff for page in requested
-                ),
+                "handoff_pages_match_manifest": set(requested)
+                == _handoff_page_headings(handoff),
                 "review_count_matches": manifest.get("review_sheet_count") == len(expected_reviews),
                 "marker_text_references_valid": marker_refs_valid,
             }

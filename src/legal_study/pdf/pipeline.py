@@ -1288,15 +1288,22 @@ class PdfIngestPipeline:
                 page = document[inspected_page.page_number - 1]
                 page_items: list[dict[str, object]] = []
                 for index, box in enumerate(clusters, start=1):
-                    clip = cls._clip_box(page.rect, box, padding=8)
+                    pdf_clip = cls._clip_box(page.cropbox, box, padding=8)
+                    rendered_box = pdf_bbox_to_rendered_bbox(
+                        [pdf_clip.x0, pdf_clip.y0, pdf_clip.x1, pdf_clip.y1],
+                        rendered_page_width=page.rect.width,
+                        rendered_page_height=page.rect.height,
+                        page_rotation=page.rotation,
+                    )
+                    rendered_clip = pymupdf.Rect(rendered_box) & page.rect
                     path = crop_dir / f"page-{inspected_page.page_number:04d}-red-{index:03d}.png"
-                    pixmap = page.get_pixmap(dpi=dpi, clip=clip, alpha=False)
+                    pixmap = page.get_pixmap(dpi=dpi, clip=rendered_clip, alpha=False)
                     with atomic_output_path(path) as temporary:
                         pixmap.save(temporary)
                     page_items.append(
                         {
                             "kind": "red_vector_cluster",
-                            "bbox": [clip.x0, clip.y0, clip.x1, clip.y1],
+                            "bbox": [pdf_clip.x0, pdf_clip.y0, pdf_clip.x1, pdf_clip.y1],
                             "image": cls._artifact_reference(artifact_root, path),
                         }
                     )

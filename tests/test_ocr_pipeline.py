@@ -14,6 +14,7 @@ from legal_study.models import (
     SuspectRegion,
     TextLayerOrigin,
     TextLayerTrust,
+    VectorMark,
 )
 from legal_study.pdf.ocr.base import (
     CoordinateTransform,
@@ -71,6 +72,61 @@ def test_target_metadata_maps_rotated_render_pixels_to_pdf_space(
     )
 
     assert mapped == BBox(x0=0, y0=0, x1=pdf_width, y1=pdf_height)
+
+
+def test_review_crop_rotates_pdf_vector_bbox_for_rendering(tmp_path: Path) -> None:
+    source = tmp_path / "rotated.pdf"
+    document = pymupdf.open()
+    page = document.new_page(width=200, height=100)
+    page.set_rotation(90)
+    document.save(source)
+    document.close()
+    inspection = DocumentInspection(
+        source_path=source,
+        sha256="0" * 64,
+        page_count=1,
+        pages=[
+            PageInspection(
+                page_number=1,
+                width=200,
+                height=100,
+                rotation=90,
+                native_text="",
+                native_char_count=0,
+                native_quality_score=0,
+                image_coverage=0,
+                largest_image_coverage=0,
+                drawing_count=1,
+                annotation_count=0,
+                mode=PageMode.HYBRID,
+                ocr_recommended=False,
+                vision_review_recommended=True,
+                vector_marks=[
+                    VectorMark(
+                        drawing_index=0,
+                        paint="fill",
+                        kind="red_vector_evidence",
+                        color_name="red",
+                        rect=BBox(x0=20, y0=10, x1=60, y1=30),
+                    )
+                ],
+            )
+        ],
+    )
+    artifact_root = tmp_path / "run"
+
+    crops = PdfIngestPipeline._render_review_crops(
+        source,
+        inspection,
+        artifact_root / "review_crops",
+        artifact_root=artifact_root,
+        dpi=72,
+    )
+
+    item = crops[1][0]
+    assert item["bbox"] == [12.0, 2.0, 68.0, 38.0]
+    image = pymupdf.Pixmap(artifact_root / item["image"])
+    assert (image.width, image.height) == (36, 56)
 
 
 class FakeOcrEngine:
