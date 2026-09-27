@@ -211,7 +211,7 @@ def test_service_restarts_bridge_child_after_abnormal_exit(tmp_path):
         assert proc.poll() is None
         assert replacement_pid and replacement_pid != first_pid
     finally:
-        subprocess.run(command + ["--stop"], timeout=10)
+        subprocess.run(command + ["--stop"], timeout=10, check=False)
         if proc.poll() is None:
             proc.wait(timeout=10)
         proc.stderr.close()

@@ -9,7 +9,6 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from legal_study.io_utils import atomic_write_json, atomic_write_text, file_sha256
 from legal_study.run_manifest import RunManifest
 
-
 ValidationScope = Literal["full", "obsidian"]
 
 
