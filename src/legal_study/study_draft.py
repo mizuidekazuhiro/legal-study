@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -143,7 +143,7 @@ def _run_relative_path(value: str) -> str:
     if not cleaned:
         raise ValueError("artifact path must not be empty")
     path = Path(cleaned)
-    if path.is_absolute() or ".." in path.parts:
+    if _is_absolute_on_any_supported_platform(cleaned) or ".." in path.parts:
         raise ValueError("artifact path must stay inside the run directory")
     return path.as_posix()
 
@@ -153,8 +153,12 @@ def _vault_relative_path(value: str) -> str:
     if not cleaned:
         raise ValueError("vault relative path must not be empty")
     path = Path(cleaned)
-    if path.is_absolute() or ".." in path.parts:
+    if _is_absolute_on_any_supported_platform(cleaned) or ".." in path.parts:
         raise ValueError("vault relative path must not escape the vault")
     if path.suffix.lower() != ".md":
         raise ValueError("Obsidian draft path must end in .md")
     return path.as_posix()
+
+
+def _is_absolute_on_any_supported_platform(value: str) -> bool:
+    return PurePosixPath(value).is_absolute() or PureWindowsPath(value).is_absolute()

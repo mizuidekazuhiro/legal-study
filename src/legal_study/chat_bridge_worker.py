@@ -15,7 +15,7 @@ from typing import Literal, Protocol
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from legal_study.chat_result import apply_chat_result, validate_chat_result
-from legal_study.io_utils import atomic_write_json, file_sha256
+from legal_study.io_utils import atomic_write_json
 from legal_study.run_manifest import RunManifest
 from legal_study.settings import LocalSettings
 
@@ -356,6 +356,7 @@ def process_bridge_command(
     settings: LocalSettings | None = None,
     notion_registrar: NotionRegistrar | None = None,
     notion_registrar_factory: Callable[[], NotionRegistrar | None] | None = None,
+    command_bytes: bytes | None = None,
 ) -> BridgeWorkerResult:
     cfg = settings or LocalSettings()
     cfg.ensure()
@@ -369,9 +370,9 @@ def process_bridge_command(
     if command_file.suffix.lower() != ".json":
         raise ValueError("Bridge command must be JSON")
 
-    command_bytes = command_file.read_bytes()
-    command_sha = hashlib.sha256(command_bytes).hexdigest()
-    command = BridgeCommand.model_validate_json(command_bytes)
+    stable_command_bytes = command_file.read_bytes() if command_bytes is None else command_bytes
+    command_sha = hashlib.sha256(stable_command_bytes).hexdigest()
+    command = BridgeCommand.model_validate_json(stable_command_bytes)
     receipt_path = layout.receipts / f"{command.command_id}.receipt.json"
     failed_path = layout.failed / f"{command.command_id}.receipt.json"
     state = BridgeStateStore(cfg.state_db)
@@ -639,12 +640,12 @@ def watch_bridge_commands(
             if now - unchanged_since < stable_seconds:
                 continue
 
+            stable_command_bytes = b""
             try:
-                BridgeCommand.model_validate_json(
-                    path.read_text(encoding="utf-8")
-                )
+                stable_command_bytes = path.read_bytes()
+                BridgeCommand.model_validate_json(stable_command_bytes)
             except Exception as exc:  # noqa: BLE001 -- isolate malformed commands
-                command_sha = file_sha256(path)
+                command_sha = hashlib.sha256(stable_command_bytes).hexdigest()
                 failed_path = layout.failed / f"invalid-{command_sha[:16]}.receipt.json"
                 atomic_write_json(
                     failed_path,
@@ -671,6 +672,7 @@ def watch_bridge_commands(
                 obsidian_inbox=inbox,
                 settings=cfg,
                 notion_registrar_factory=notion_registrar_factory,
+                command_bytes=stable_command_bytes,
             )
             yield result
             next_attempt = (

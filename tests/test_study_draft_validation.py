@@ -7,6 +7,35 @@ from legal_study.study_draft_validation import validate_study_draft_evidence
 
 def _write_run(run_dir: Path) -> None:
     (run_dir / "handoff_review").mkdir(parents=True)
+    manifest = {
+        "schema_version": "1",
+        "run_id": "run-22",
+        "input_hash": "i" * 64,
+        "created_at": "2026-09-23T00:00:00Z",
+        "updated_at": "2026-09-23T00:00:00Z",
+        "subject": "criminal",
+        "question": "22",
+        "requested_pages": [110],
+        "source": {
+            "original_path": "C:/input/source.pdf",
+            "original_filename": "論文マスター_刑法.pdf",
+            "source_size": 10,
+            "source_mtime_ns": 1,
+            "sha256": "a" * 64,
+            "snapshot_path": "C:/Users/test/.legal-study/sources/sha256/source.pdf",
+            "snapshot_created_at": "2026-09-23T00:00:00Z",
+        },
+        "output_dir": ".",
+        "page_count": 1,
+        "pipeline_config": {},
+        "app_version": "0.1.0",
+        "python_version": "3.13.7",
+        "platform": "Windows",
+        "pymupdf_version": "1.28.2",
+    }
+    (run_dir / "run_manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False), encoding="utf-8"
+    )
     canonical = {
         "schema_version": 3,
         "subject": "criminal",
@@ -19,6 +48,7 @@ def _write_run(run_dir: Path) -> None:
         "pages": [
             {
                 "page_number": 110,
+                "stable_page_id": "stable-110",
                 "reconciled_text": "講師答案本文",
                 "repair_review_count": 0,
             }

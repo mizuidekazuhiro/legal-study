@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 
@@ -157,6 +158,47 @@ def test_obsidian_command_is_idempotent_and_receipted(tmp_path: Path) -> None:
     )
     assert second.processed is False
     assert second.status == "ALREADY_COMPLETED"
+
+
+def test_process_uses_command_bytes_captured_by_stability_gate(tmp_path: Path) -> None:
+    settings = LocalSettings(home=tmp_path / "home")
+    settings.ensure()
+    _run, run_id, source_sha = _write_run(settings)
+    bridge = tmp_path / "bridge"
+    for name in ("10_approved", "20_commands", "30_receipts", "99_failed"):
+        (bridge / name).mkdir(parents=True)
+    result_file = bridge / "10_approved" / "result.json"
+    _write_result(result_file, source_sha, run_id)
+    command = BridgeCommand(
+        command_id="snapshot-001",
+        action="apply_obsidian",
+        subject="criminal",
+        question="16",
+        source_sha256=source_sha,
+        run_id=run_id,
+        result_file="10_approved/result.json",
+        result_sha256=file_sha256(result_file),
+        approved_at="2026-09-23T00:00:00Z",
+        approval_text="承認",
+    )
+    command_path = bridge / "20_commands" / "snapshot.json"
+    command_path.write_text(command.model_dump_json(), encoding="utf-8")
+    stable_bytes = command_path.read_bytes()
+    command_path.write_text("{}", encoding="utf-8")
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+
+    outcome = process_bridge_command(
+        command_path=command_path,
+        bridge_root=bridge,
+        obsidian_inbox=inbox,
+        settings=settings,
+        command_bytes=stable_bytes,
+    )
+
+    assert outcome.status == "SUCCESS"
+    receipt = json.loads(Path(outcome.receipt_path or "").read_text(encoding="utf-8"))
+    assert receipt["command_sha256"] == hashlib.sha256(stable_bytes).hexdigest()
 
 
 def test_success_receipt_restores_missing_local_ledger(

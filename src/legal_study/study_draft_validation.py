@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -8,6 +9,7 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, Field
 
+from legal_study.run_manifest import RunManifest
 from legal_study.study_draft import EvidenceRef, StudyDraft
 
 
@@ -51,6 +53,19 @@ def validate_study_draft_evidence(
     validation_path = _resolve_run_file(root, draft.source.problem_validation_path)
 
     canonical = _read_json(canonical_path, issues, "source.canonical_source_path")
+    try:
+        manifest = RunManifest.model_validate_json(
+            (root / "run_manifest.json").read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError) as exc:
+        issues.append(
+            StudyDraftValidationIssue(
+                code="INVALID_RUN_MANIFEST",
+                message=f"Could not read run_manifest.json: {exc}",
+                location="source.run_id",
+            )
+        )
+        manifest = None
     problem_validation = _read_json(
         validation_path,
         issues,
@@ -62,7 +77,7 @@ def validate_study_draft_evidence(
         "source.handoff_path",
     )
 
-    if canonical is None or handoff_frontmatter is None:
+    if canonical is None or handoff_frontmatter is None or manifest is None:
         return StudyDraftValidationResult(valid=False, issues=issues)
 
     _validate_source_identity(
@@ -70,6 +85,7 @@ def validate_study_draft_evidence(
         canonical=canonical,
         handoff_frontmatter=handoff_frontmatter,
         problem_validation=problem_validation,
+        manifest=manifest,
         issues=issues,
     )
 
@@ -289,6 +305,7 @@ def _validate_source_identity(
     canonical: dict[str, Any],
     handoff_frontmatter: dict[str, Any],
     problem_validation: dict[str, Any] | None,
+    manifest: RunManifest,
     issues: list[StudyDraftValidationIssue],
 ) -> None:
     canonical_source = canonical.get("source")
@@ -313,6 +330,32 @@ def _validate_source_identity(
         for page in canonical.get("pages", [])
         if isinstance(page, dict) and page.get("page_number") is not None
     ]
+    canonical_stable_page_ids = [
+        str(page["stable_page_id"])
+        for page in canonical.get("pages", [])
+        if isinstance(page, dict) and page.get("stable_page_id") is not None
+    ]
+    immutable_actual: dict[str, object] = {
+        "run_id": manifest.run_id,
+        "source_snapshot_path": manifest.source.snapshot_path,
+        "stable_page_ids": canonical_stable_page_ids,
+    }
+    for key, value in immutable_actual.items():
+        draft_value = getattr(draft.source, key)
+        matches = (
+            os.path.normcase(os.path.normpath(draft_value))
+            == os.path.normcase(os.path.normpath(str(value)))
+            if key == "source_snapshot_path"
+            else draft_value == value
+        )
+        if not matches:
+            issues.append(
+                StudyDraftValidationIssue(
+                    code="SOURCE_RUN_IDENTITY_MISMATCH",
+                    message=f"Run {key}={value!r}, draft has {getattr(draft.source, key)!r}",
+                    location=f"source.{key}",
+                )
+            )
     actual = {
         "subject": canonical.get("subject"),
         "question": canonical.get("question"),

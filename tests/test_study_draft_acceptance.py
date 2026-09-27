@@ -1,11 +1,42 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from legal_study.study_draft_acceptance import accept_study_draft_response
 
 
 def _write_run(run_dir: Path) -> None:
     (run_dir / "handoff_review").mkdir(parents=True)
+    manifest = {
+        "schema_version": "1",
+        "run_id": "run-22",
+        "input_hash": "i" * 64,
+        "created_at": "2026-09-23T00:00:00Z",
+        "updated_at": "2026-09-23T00:00:00Z",
+        "subject": "criminal",
+        "question": "22",
+        "requested_pages": [110],
+        "source": {
+            "original_path": "C:/input/source.pdf",
+            "original_filename": "論文マスター_刑法.pdf",
+            "source_size": 10,
+            "source_mtime_ns": 1,
+            "sha256": "a" * 64,
+            "snapshot_path": "C:/Users/test/.legal-study/sources/sha256/source.pdf",
+            "snapshot_created_at": "2026-09-23T00:00:00Z",
+        },
+        "output_dir": ".",
+        "page_count": 1,
+        "pipeline_config": {},
+        "app_version": "0.1.0",
+        "python_version": "3.13.7",
+        "platform": "Windows",
+        "pymupdf_version": "1.28.2",
+    }
+    (run_dir / "run_manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False), encoding="utf-8"
+    )
     canonical = {
         "schema_version": 3,
         "subject": "criminal",
@@ -18,6 +49,7 @@ def _write_run(run_dir: Path) -> None:
         "pages": [
             {
                 "page_number": 110,
+                "stable_page_id": "stable-110",
                 "reconciled_text": "講師答案本文",
                 "repair_review_count": 0,
             }
@@ -178,6 +210,33 @@ def test_valid_response_is_accepted_and_saved_atomically(tmp_path: Path) -> None
     assert saved["anki_cards"][0]["status"] == "DRAFT"
     assert saved["anki_cards"][0]["export_to_anki"] is False
     assert not list(run_dir.glob(".study_draft.json.*.tmp"))
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("run_id", "different-run"),
+        ("source_snapshot_path", "C:/store/other.pdf"),
+        ("stable_page_ids", ["different-page"]),
+    ],
+)
+def test_response_source_identity_must_match_run_artifacts(
+    tmp_path: Path, field: str, replacement: object
+) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_run(run_dir)
+    payload = _payload()
+    payload["source"][field] = replacement
+
+    result = accept_study_draft_response(
+        raw_response_text=_raw(payload),
+        run_dir=run_dir,
+    )
+
+    assert result.accepted is False
+    matching = [issue for issue in result.issues if issue.location == f"source.{field}"]
+    assert [issue.code for issue in matching] == ["SOURCE_RUN_IDENTITY_MISMATCH"]
 
 
 def test_response_must_cover_each_canonical_review_sheet_once(tmp_path: Path) -> None:
