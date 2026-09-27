@@ -40,6 +40,7 @@ if ($state -and $state.pid) {
     if ($state.status -eq 'failed') { $issues.Add('WATCHER_ABNORMAL_EXIT') }
     if ($state.last_error -and $now - [double]$state.last_error.at -lt 86400) { $issues.Add('RECENT_WORKER_ERROR') }
     if ($interactive -and !$state.pdf_available) { $issues.Add('PDF_SYNC_PATH_UNAVAILABLE_IN_USER_SESSION') }
+    if ($interactive -and $state.bridge_available -eq $false) { $issues.Add('CHAT_BRIDGE_PATH_UNAVAILABLE_IN_USER_SESSION') }
 } elseif ($interactive -and $task) { $issues.Add('HEARTBEAT_MISSING') }
 $normalResidentTask = $task -and $task.State -eq 'Running' -and $info.LastTaskResult -in @(267009,2147946720)
 if ($info -and !$normalResidentTask -and $info.LastTaskResult -notin @(0,267009,267011) -and (!$state -or $state.status -ne 'stopped')) { $issues.Add('TASK_LAST_RESULT_NONZERO') }

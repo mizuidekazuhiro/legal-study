@@ -146,40 +146,41 @@ def validate_chat_result(
         "administrative": "行政法 論文試験",
     }.get(manifest.subject)
 
-    for index, card in enumerate(result.anki_cards):
-        if expected_subject and card.subject != expected_subject:
-            issues.append(f"ANKI_SUBJECT_MISMATCH:{index}")
-        if expected_deck and card.anki_deck != expected_deck:
-            issues.append(f"ANKI_DECK_MISMATCH:{index}")
-        for field_name, value in (
-            ("front", card.front),
-            ("back", card.back),
-        ):
-            if "<br>" not in value:
-                issues.append(f"ANKI_HTML_BREAK_MISSING:{index}:{field_name}")
-        if card.scope == "common_rule" and (
-            not card.extra or "<br>" not in card.extra
-        ):
-            issues.append(f"ANKI_COMMON_EXTRA_INVALID:{index}")
-
     problem_cards = [card for card in result.anki_cards if card.scope == "problem"]
     common_cards = [card for card in result.anki_cards if card.scope == "common_rule"]
 
-    if problem_cards and (
-        not result.problem_card_extra or "<br>" not in result.problem_card_extra
-    ):
-        issues.append("PROBLEM_CARD_EXTRA_MISSING")
+    if validation_scope == "full":
+        for index, card in enumerate(result.anki_cards):
+            if expected_subject and card.subject != expected_subject:
+                issues.append(f"ANKI_SUBJECT_MISMATCH:{index}")
+            if expected_deck and card.anki_deck != expected_deck:
+                issues.append(f"ANKI_DECK_MISMATCH:{index}")
+            for field_name, value in (
+                ("front", card.front),
+                ("back", card.back),
+            ):
+                if "<br>" not in value:
+                    issues.append(f"ANKI_HTML_BREAK_MISSING:{index}:{field_name}")
+            if card.scope == "common_rule" and (
+                not card.extra or "<br>" not in card.extra
+            ):
+                issues.append(f"ANKI_COMMON_EXTRA_INVALID:{index}")
 
-    if manifest.subject == "criminal" and validation_scope == "full":
-        if not any(
-            card.scope == "problem"
-            and card.learning_type == "B"
-            and card.level == "L4"
-            for card in result.anki_cards
+        if problem_cards and (
+            not result.problem_card_extra or "<br>" not in result.problem_card_extra
         ):
-            issues.append("CRIMINAL_L4_B_CARD_MISSING")
-        if not problem_cards:
-            issues.append("CRIMINAL_PROBLEM_CARDS_MISSING")
+            issues.append("PROBLEM_CARD_EXTRA_MISSING")
+
+        if manifest.subject == "criminal":
+            if not any(
+                card.scope == "problem"
+                and card.learning_type == "B"
+                and card.level == "L4"
+                for card in result.anki_cards
+            ):
+                issues.append("CRIMINAL_L4_B_CARD_MISSING")
+            if not problem_cards:
+                issues.append("CRIMINAL_PROBLEM_CARDS_MISSING")
 
     if not result.obsidian_note.markdown.strip():
         issues.append("OBSIDIAN_MARKDOWN_EMPTY")

@@ -145,6 +145,39 @@ def test_obsidian_only_validation_accepts_no_cards_but_full_validation_does_not(
     assert obsidian.card_count == 0
 
 
+def test_obsidian_only_validation_ignores_anki_policy_fields(tmp_path: Path) -> None:
+    run = _run(tmp_path)
+    payload = _payload()
+    payload["problem_card_extra"] = None
+    payload["anki_cards"][0].update(
+        {
+            "subject": "wrong subject",
+            "anki_deck": "wrong deck",
+            "front": "no html break",
+            "back": "no html break",
+        }
+    )
+    payload["anki_cards"][1]["extra"] = "no html break"
+    result_file = tmp_path / "study_result.json"
+    result_file.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    full = validate_chat_result(result_path=result_file, run_dir=run)
+    obsidian = validate_chat_result(
+        result_path=result_file,
+        run_dir=run,
+        validation_scope="obsidian",
+    )
+
+    assert full.valid is False
+    assert "ANKI_SUBJECT_MISMATCH:0" in full.issues
+    assert "ANKI_DECK_MISMATCH:0" in full.issues
+    assert "ANKI_HTML_BREAK_MISSING:0:front" in full.issues
+    assert "ANKI_COMMON_EXTRA_INVALID:1" in full.issues
+    assert "PROBLEM_CARD_EXTRA_MISSING" in full.issues
+    assert obsidian.valid is True
+    assert obsidian.issues == []
+
+
 def test_criminal_card_roles_and_l4_b_requirement_are_counted_independently(
     tmp_path: Path,
 ) -> None:
