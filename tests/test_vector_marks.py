@@ -17,6 +17,7 @@ def test_saturated_palette_classification_includes_green() -> None:
     assert classify_color_family((0.98, 0.93, 0.24)) == "yellow"
     assert classify_color_family((0.95, 0.20, 0.18)) == "red"
     assert classify_color_family((0.91, 0.91, 0.91)) is None
+    assert classify_color_family((0.10, 0.20, 0.30)) is None
 
 
 def test_page_palette_clusters_nearby_colors_without_assigning_meaning() -> None:

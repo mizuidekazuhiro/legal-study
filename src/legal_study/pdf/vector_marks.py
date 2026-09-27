@@ -52,7 +52,7 @@ def classify_color_family(rgb: tuple[float, float, float] | None) -> str | None:
         return None
     red, green, blue = (max(0.0, min(1.0, float(value))) for value in rgb)
     hue, saturation, value = colorsys.rgb_to_hsv(red, green, blue)
-    if saturation < 0.20 or value < 0.30:
+    if saturation < 0.20 or value < 0.40:
         return None
     if hue < 0.04 or hue >= 0.96:
         return "red"
