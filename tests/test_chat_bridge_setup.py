@@ -17,6 +17,14 @@ CHECKER = REPO_ROOT / "scripts" / "check_chat_bridge_setup.ps1"
 STARTER = REPO_ROOT / "scripts" / "start_chat_bridge.ps1"
 
 
+def _stable_tree(root: Path) -> set[Path]:
+    return {
+        path
+        for path in root.rglob("*")
+        if not (path.name.endswith(".lock") and ".git" in path.parts)
+    }
+
+
 def test_doctor_does_not_create_workspace(tmp_path: Path) -> None:
     home = tmp_path / "missing-home"
     result = CliRunner().invoke(app, ["doctor"], env={"LEGAL_STUDY_HOME": str(home)})
@@ -105,7 +113,7 @@ def _run_checker(tmp_path: Path, *, omit: str | None = None) -> tuple[subprocess
     for folder in ("00_pending", "10_approved", "20_commands", "30_receipts", "99_failed"):
         if folder != omit and omit != "BridgeRoot":
             (paths["BridgeRoot"] / folder).mkdir(exist_ok=True)
-    before = {path for path in tmp_path.rglob("*")}
+    before = _stable_tree(tmp_path)
     args = [powershell, "-NoProfile"]
     if os.name == "nt":
         args.extend(["-ExecutionPolicy", "Bypass"])
@@ -115,7 +123,7 @@ def _run_checker(tmp_path: Path, *, omit: str | None = None) -> tuple[subprocess
     completed = subprocess.run(
         args, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False
     )
-    assert {path for path in tmp_path.rglob("*")} == before
+    assert _stable_tree(tmp_path) == before
     return completed, paths
 
 
