@@ -144,10 +144,8 @@ def create_handoff_review_sheets(
             tasks_by_page[int(task["page_number"])].append(task)
 
     output_refs: dict[int, str] = {}
-    for page_number, tasks in tasks_by_page.items():
-        page = pages.get(page_number)
-        if page is None:
-            continue
+    for page_number, page in pages.items():
+        tasks = tasks_by_page.get(page_number, [])
         page_reference = page.get("rendered_image")
         if not isinstance(page_reference, str):
             continue

@@ -34,6 +34,44 @@ def _marked_pdf(path: Path) -> None:
     document.close()
 
 
+def _plain_pdf(path: Path) -> None:
+    document = pymupdf.open()
+    page = document.new_page(width=600, height=800)
+    text = " ".join(["PLAIN LEGAL STUDY PAGE TEXT"] * 12)
+    page.insert_textbox((40, 40, 560, 760), text, fontsize=12)
+    document.save(path)
+    document.close()
+
+
+def test_clean_page_still_gets_full_page_review_sheet(tmp_path: Path) -> None:
+    source = tmp_path / "plain.pdf"
+    _plain_pdf(source)
+    settings = LocalSettings(home=tmp_path / "home")
+    snapshot = snapshot_source(source, settings=settings)
+    pipeline = PdfIngestPipeline()
+    prepared = prepare_run(
+        snapshot=snapshot,
+        subject="criminal",
+        question="plain",
+        pages=[1],
+        pipeline_config=pipeline.input_config(),
+        settings=settings,
+    )
+
+    pipeline.run(snapshot, prepared, pages=[1])
+
+    canonical = json.loads(
+        (prepared.output_dir / "canonical_source.json").read_text(encoding="utf-8")
+    )
+    assert canonical["needs_review"] == []
+    assert canonical["handoff_review_sheets"] == {
+        "1": "handoff_review/page-0001-review.png"
+    } or canonical["handoff_review_sheets"] == {
+        1: "handoff_review/page-0001-review.png"
+    }
+    assert (prepared.output_dir / "handoff_review/page-0001-review.png").is_file()
+
+
 def test_pipeline_writes_valid_problem_packet_with_relative_evidence(tmp_path: Path) -> None:
     source = tmp_path / "marked.pdf"
     _marked_pdf(source)
