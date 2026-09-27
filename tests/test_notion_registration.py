@@ -206,6 +206,22 @@ def test_duplicate_name_aborts_before_any_create(tmp_path: Path) -> None:
     assert client.pages.created == []
 
 
+def test_duplicate_names_within_result_abort_before_any_create(tmp_path: Path) -> None:
+    run, result_path = _write_run_and_result(tmp_path)
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    payload["anki_cards"].append(dict(payload["anki_cards"][0]))
+    result_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    client = FakeClient()
+    registrar = LegalQuestionBankRegistrar(
+        token="test-token", client_factory=lambda _token: client
+    )
+
+    with pytest.raises(RuntimeError, match="duplicate card names"):
+        registrar.register(result_path=result_path, run_dir=run)
+
+    assert client.pages.created == []
+
+
 def test_exact_existing_card_is_resumed_without_duplicate_create(tmp_path: Path) -> None:
     run, result_path = _write_run_and_result(tmp_path)
     client = FakeClient()

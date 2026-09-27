@@ -178,6 +178,19 @@ def test_obsidian_only_validation_ignores_anki_policy_fields(tmp_path: Path) -> 
     assert obsidian.issues == []
 
 
+def test_problem_card_page_must_be_in_requested_pages(tmp_path: Path) -> None:
+    run = _run(tmp_path)
+    payload = _payload()
+    payload["anki_cards"][0]["pdf_page_number"] = 999
+    result_file = tmp_path / "study_result.json"
+    result_file.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    report = validate_chat_result(result_path=result_file, run_dir=run)
+
+    assert report.valid is False
+    assert "ANKI_PROBLEM_PAGE_OUTSIDE_SOURCE:0" in report.issues
+
+
 def test_criminal_card_roles_and_l4_b_requirement_are_counted_independently(
     tmp_path: Path,
 ) -> None:
@@ -303,6 +316,7 @@ def test_all_pages_run_uses_page_count_as_effective_requested_pages(tmp_path: Pa
     payload = _payload()
     payload["source"]["requested_pages"] = [1, 2]
     payload["reviewed_pages"] = [1, 2]
+    payload["anki_cards"][0]["pdf_page_number"] = 1
     result_file = tmp_path / "study_result.json"
     result_file.write_text(
         json.dumps(payload, ensure_ascii=False),

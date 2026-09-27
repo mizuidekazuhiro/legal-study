@@ -165,6 +165,8 @@ def validate_chat_result(
                 not card.extra or "<br>" not in card.extra
             ):
                 issues.append(f"ANKI_COMMON_EXTRA_INVALID:{index}")
+            if card.scope == "problem" and card.pdf_page_number not in requested:
+                issues.append(f"ANKI_PROBLEM_PAGE_OUTSIDE_SOURCE:{index}")
 
         if problem_cards and (
             not result.problem_card_extra or "<br>" not in result.problem_card_extra

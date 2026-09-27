@@ -181,7 +181,12 @@ class LegalQuestionBankRegistrar:
                         f"{card.name}: {property_name}={value!r} not in {sorted(options)!r}"
                     )
 
-        duplicate_names: list[str] = []
+        card_names = [
+            chat_result.ChatAnkiCard.model_validate(raw).name for raw in cards
+        ]
+        duplicate_names: list[str] = [
+            name for name in set(card_names) if card_names.count(name) > 1
+        ]
         resumable_page_ids: dict[str, str] = {}
         for raw in cards:
             card = chat_result.ChatAnkiCard.model_validate(raw)
