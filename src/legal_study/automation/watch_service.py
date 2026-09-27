@@ -304,7 +304,7 @@ def main():
                 and current is not None
                 and (current != baseline or state["study_started"])
                 and "study" not in children
-                and bridge.is_dir()
+                and paths_now_available
                 and now >= restart_after.get("study", 0)
             ):
                 start(

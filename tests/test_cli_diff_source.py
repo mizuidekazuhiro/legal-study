@@ -2,9 +2,11 @@ import json
 from pathlib import Path
 
 import pymupdf
+import pytest
+import typer
 from typer.testing import CliRunner
 
-from legal_study.cli import app
+from legal_study.cli import _parse_pages, app
 from legal_study.pdf.pipeline import PdfIngestPipeline
 from legal_study.run_manifest import prepare_run
 from legal_study.settings import LocalSettings
@@ -66,3 +68,37 @@ def test_diff_source_maps_requested_page_after_insertion(
     assert payload["suggested_current_pages"] == [2]
     assert payload["safe_for_base_ocr_reuse_pages"] == [2]
     assert payload["requested_page_alignment"][0]["classification"] == "MOVED"
+
+
+def test_diff_source_includes_every_page_for_all_page_run(
+    tmp_path: Path, monkeypatch
+) -> None:
+    home = tmp_path / "home"
+    monkeypatch.setenv("LEGAL_STUDY_HOME", str(home))
+    old_pdf = tmp_path / "old.pdf"
+    new_pdf = tmp_path / "new.pdf"
+    _pdf(old_pdf, insert_front=False)
+    _pdf(new_pdf, insert_front=True)
+    settings = LocalSettings()
+    old_snapshot = snapshot_source(old_pdf, settings=settings)
+    pipeline = PdfIngestPipeline()
+    prepared = prepare_run(
+        snapshot=old_snapshot, subject="criminal", question="all",
+        pages=None, pipeline_config=pipeline.input_config(), settings=settings,
+    )
+    pipeline.run(old_snapshot, prepared, pages=None)
+
+    result = CliRunner().invoke(
+        app, ["diff-source", str(new_pdf), "--against-run", str(prepared.output_dir)]
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["requested_baseline_pages"] is None
+    assert payload["suggested_current_pages"] == [2]
+
+
+@pytest.mark.parametrize("value", ["20-10", "0", "0-2", "-1"])
+def test_parse_pages_rejects_nonpositive_or_descending_ranges(value: str) -> None:
+    with pytest.raises((typer.BadParameter, ValueError)):
+        _parse_pages(value)

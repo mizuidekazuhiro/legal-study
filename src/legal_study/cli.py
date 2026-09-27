@@ -60,9 +60,16 @@ def _parse_pages(value: str | None) -> list[int] | None:
         part = part.strip()
         if "-" in part:
             start, end = [int(x) for x in part.split("-", 1)]
+            if start < 1 or end < 1 or start > end:
+                raise typer.BadParameter(
+                    f"Page range must be positive and ascending: {part}"
+                )
             pages.update(range(start, end + 1))
         else:
-            pages.add(int(part))
+            page = int(part)
+            if page < 1:
+                raise typer.BadParameter(f"Page number must be positive: {part}")
+            pages.add(page)
     return sorted(pages)
 
 
@@ -767,7 +774,11 @@ def diff_source(
     )
     alignment = align_page_indexes(previous, current)
 
-    requested = set(manifest.requested_pages or [])
+    requested = set(
+        manifest.requested_pages
+        if manifest.requested_pages is not None
+        else range(1, previous.page_count + 1)
+    )
     relevant = [
         item
         for item in alignment.records
