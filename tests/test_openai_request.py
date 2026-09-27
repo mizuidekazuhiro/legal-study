@@ -130,6 +130,10 @@ def _bundle(tmp_path: Path):
 
 def test_request_template_matches_responses_multimodal_shape(tmp_path: Path) -> None:
     run_dir, bundle = _bundle(tmp_path)
+    marker = bundle.logical_markers[0]
+    marker.canonical_start_char = 3
+    marker.canonical_end_char_exclusive = 10
+    marker.character_range_semantics = "page_unicode_codepoints_end_exclusive"
 
     request = build_openai_responses_request_template(
         bundle=bundle,
@@ -155,6 +159,9 @@ def test_request_template_matches_responses_multimodal_shape(tmp_path: Path) -> 
     assert "## Canonical logical marker candidates" in content[0]["text"]
     assert "p0110-logical-mark-001" in content[0]["text"]
     assert "color=yellow" in content[0]["text"]
+    assert "canonical_chars=3-10" in content[0]["text"]
+    assert "range_semantics=page_unicode_codepoints_end_exclusive" in content[0]["text"]
+    assert "legacy_native_chars=10-15" in content[0]["text"]
     assert 'exact_text="講師答案本文"' in content[0]["text"]
     assert "review_status=NEEDS_REVIEW" in content[0]["text"]
     assert "not, by itself, a reason to leave the final draft unresolved" in content[0]["text"]
