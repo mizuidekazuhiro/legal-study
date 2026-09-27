@@ -237,7 +237,7 @@ def run_openai_study_draft_poc(
                 receipt_path,
                 {
                     "schema_version": "study_draft_api_receipt.v1",
-                    "state": "FAILED",
+                    "state": "CALLING",
                     "started_at": started_at,
                     "finished_at": datetime.now(UTC).isoformat(),
                     "request_sha256": request_hash,
@@ -248,7 +248,7 @@ def run_openai_study_draft_poc(
                     "max_output_tokens": cfg.max_output_tokens,
                     "image_detail": cfg.image_detail,
                     "accepted": False,
-                    "reason": "API_CALL_FAILED",
+                    "reason": "API_SUBMISSION_AMBIGUOUS",
                     "error": repr(exc),
                 },
             )

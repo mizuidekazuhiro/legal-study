@@ -13,7 +13,10 @@ from legal_study.automation.sync_stability import (
     mark_question_sync_stable_from_verified_hash,
     wait_for_sync_stable,
 )
-from legal_study.completion.done_marker import detect_embedded_done_markers
+from legal_study.completion.done_marker import (
+    detect_done_markers,
+    detect_embedded_done_markers,
+)
 from legal_study.completion.question_resolution import (
     CompletionApplyResult,
     apply_done_markers_to_snapshot,
@@ -150,9 +153,17 @@ def reconcile_unregistered_done(
     Discovery uses embedded marker signatures only, so an unchanged PDF does not
     trigger a full render or OCR pass. Resolution OCR is limited to detected pages.
     """
-    detections = detect_embedded_done_markers(
-        snapshot.snapshot_path,
-        pages=done_pages,
+    detections = (
+        [
+            item
+            for item in detect_done_markers(
+                snapshot.snapshot_path,
+                pages=done_pages,
+            )
+            if item.detected
+        ]
+        if done_pages is not None
+        else detect_embedded_done_markers(snapshot.snapshot_path)
     )
     if not detections:
         return [], []
@@ -506,6 +517,7 @@ def watch_pdf_updates(
 
     cfg = settings or LocalSettings()
     cfg.ensure()
+    watcher = FileUpdateWatcher(pdf)
     baseline, startup = recover_watch_startup(
         pdf,
         subject=subject,
@@ -521,7 +533,6 @@ def watch_pdf_updates(
         return
 
     automation_state = AutomationStateStore(cfg.state_db)
-    watcher = FileUpdateWatcher(pdf)
     while True:
         time.sleep(poll_interval_seconds)
         event: FileUpdateEvent | None = watcher.poll_once()

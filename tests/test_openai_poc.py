@@ -407,7 +407,7 @@ def test_existing_receipt_prevents_accidental_second_api_call(tmp_path: Path) ->
     assert second_client.responses.calls == []
 
 
-def test_network_exception_records_failed_receipt(tmp_path: Path) -> None:
+def test_network_exception_keeps_submission_receipt_resumable(tmp_path: Path) -> None:
     run_dir, bundle = _bundle(tmp_path)
 
     class FailingResponses:
@@ -427,7 +427,8 @@ def test_network_exception_records_failed_receipt(tmp_path: Path) -> None:
         (run_dir / "study_draft_api_receipt.json").read_text(encoding="utf-8")
     )
     assert receipt["accepted"] is False
-    assert receipt["reason"] == "API_CALL_FAILED"
+    assert receipt["state"] == "CALLING"
+    assert receipt["reason"] == "API_SUBMISSION_AMBIGUOUS"
     assert "network exploded" in receipt["error"]
 
 
