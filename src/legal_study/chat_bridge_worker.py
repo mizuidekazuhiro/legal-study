@@ -47,7 +47,10 @@ class BridgeCommand(StrictBridgeModel):
         cleaned = value.strip()
         if not cleaned:
             raise ValueError("command_id must not be empty")
-        if any(char not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._" for char in cleaned):
+        if any(
+            char not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._"
+            for char in cleaned
+        ):
             raise ValueError("command_id contains unsupported characters")
         return cleaned
 
@@ -74,9 +77,7 @@ class BridgeCommand(StrictBridgeModel):
             self.action in {BridgeAction.REGISTER_NOTION, BridgeAction.APPLY_ALL}
             and not self.notion_registration_authorized
         ):
-            raise ValueError(
-                "Notion actions require notion_registration_authorized=true"
-            )
+            raise ValueError("Notion actions require notion_registration_authorized=true")
         return self
 
 
@@ -107,8 +108,7 @@ class NotionRegistrationResult(StrictBridgeModel):
 
 
 class NotionRegistrar(Protocol):
-    def register(self, *, result_path: Path, run_dir: Path) -> NotionRegistrationResult:
-        ...
+    def register(self, *, result_path: Path, run_dir: Path) -> NotionRegistrationResult: ...
 
 
 class BridgeCommandState(StrEnum):
@@ -183,9 +183,7 @@ class BridgeStateStore:
                 return "new"
 
             if row["command_sha256"] != command_sha256:
-                raise RuntimeError(
-                    "command_id was reused with different command bytes"
-                )
+                raise RuntimeError("command_id was reused with different command bytes")
             state = BridgeCommandState(row["state"])
             if state == BridgeCommandState.COMPLETED:
                 return "done"
@@ -253,12 +251,14 @@ class BridgeLayout(StrictBridgeModel):
     def failed(self) -> Path:
         return self.root / "99_failed"
 
-    def verify(self) -> None:
-        missing = [
-            str(path)
-            for path in (self.approved, self.commands, self.receipts, self.failed)
-            if not path.is_dir()
-        ]
+    def missing_paths(self, *, obsidian_inbox: Path | None = None) -> list[Path]:
+        required = [self.approved, self.commands, self.receipts, self.failed]
+        if obsidian_inbox is not None:
+            required.append(obsidian_inbox)
+        return [path for path in required if not path.is_dir()]
+
+    def verify(self, *, obsidian_inbox: Path | None = None) -> None:
+        missing = [str(path) for path in self.missing_paths(obsidian_inbox=obsidian_inbox)]
         if missing:
             raise FileNotFoundError(
                 "Chat bridge folder structure is incomplete: " + ", ".join(missing)
@@ -284,9 +284,7 @@ def resolve_run_dir(
     matches: list[Path] = []
     for manifest_path in runs_dir.rglob("run_manifest.json"):
         try:
-            manifest = RunManifest.model_validate_json(
-                manifest_path.read_text(encoding="utf-8")
-            )
+            manifest = RunManifest.model_validate_json(manifest_path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
         if (
@@ -299,8 +297,7 @@ def resolve_run_dir(
 
     if len(matches) != 1:
         raise RuntimeError(
-            "Could not resolve exactly one local run for bridge command: "
-            f"matches={matches}"
+            f"Could not resolve exactly one local run for bridge command: matches={matches}"
         )
     return matches[0]
 
@@ -326,7 +323,7 @@ def process_bridge_command(
     cfg.ensure()
 
     layout = BridgeLayout(root=bridge_root.expanduser().resolve())
-    layout.verify()
+    layout.verify(obsidian_inbox=obsidian_inbox)
     command_file = command_path.expanduser().resolve()
 
     if command_file.parent != layout.commands.resolve():
@@ -335,9 +332,7 @@ def process_bridge_command(
         raise ValueError("Bridge command must be JSON")
 
     command_sha = file_sha256(command_file)
-    command = BridgeCommand.model_validate_json(
-        command_file.read_text(encoding="utf-8")
-    )
+    command = BridgeCommand.model_validate_json(command_file.read_text(encoding="utf-8"))
     state = BridgeStateStore(cfg.state_db)
     begin_state = state.begin(command.command_id, command_sha)
 
@@ -369,20 +364,14 @@ def process_bridge_command(
             question=command.question,
             source_sha256=command.source_sha256,
         )
-        validation_scope = (
-            "obsidian"
-            if command.action == BridgeAction.APPLY_OBSIDIAN
-            else "full"
-        )
+        validation_scope = "obsidian" if command.action == BridgeAction.APPLY_OBSIDIAN else "full"
         validation = validate_chat_result(
             result_path=result_path,
             run_dir=run_dir,
             validation_scope=validation_scope,
         )
         if not validation.valid:
-            raise RuntimeError(
-                "Chat result validation failed: " + ", ".join(validation.issues)
-            )
+            raise RuntimeError("Chat result validation failed: " + ", ".join(validation.issues))
 
         obsidian_status: str | None = None
         obsidian_path: str | None = None
@@ -415,9 +404,7 @@ def process_bridge_command(
             notion_created = notion.created
             notion_verified = notion.verified
             if notion.created != notion.verified:
-                raise RuntimeError(
-                    "Notion post-registration verification count mismatch"
-                )
+                raise RuntimeError("Notion post-registration verification count mismatch")
 
         receipt = BridgeReceipt(
             command_id=command.command_id,
@@ -486,12 +473,33 @@ def watch_bridge_commands(
     cfg = settings or LocalSettings()
     cfg.ensure()
     layout = BridgeLayout(root=bridge_root.expanduser().resolve())
-    layout.verify()
+    inbox = obsidian_inbox.expanduser().resolve()
 
     observations: dict[Path, tuple[int, int, float]] = {}
+    bridge_available: bool | None = None
 
     while True:
         now = time.monotonic()
+        missing = layout.missing_paths(obsidian_inbox=inbox)
+        if missing:
+            observations.clear()
+            if bridge_available is not False:
+                bridge_available = False
+                yield BridgeWorkerResult(
+                    processed=False,
+                    status="WAITING_FOR_BRIDGE",
+                    error="Unavailable paths: " + ", ".join(str(path) for path in missing),
+                )
+            time.sleep(poll_interval_seconds)
+            continue
+        if bridge_available is False:
+            bridge_available = True
+            yield BridgeWorkerResult(
+                processed=False,
+                status="BRIDGE_AVAILABLE",
+            )
+        else:
+            bridge_available = True
         present = sorted(layout.commands.glob("*.json"))
 
         for path in list(observations):
@@ -513,9 +521,7 @@ def watch_bridge_commands(
 
             registrar = None
             if notion_registrar_factory is not None:
-                preview = BridgeCommand.model_validate_json(
-                    path.read_text(encoding="utf-8")
-                )
+                preview = BridgeCommand.model_validate_json(path.read_text(encoding="utf-8"))
                 if preview.action in {
                     BridgeAction.REGISTER_NOTION,
                     BridgeAction.APPLY_ALL,
@@ -525,7 +531,7 @@ def watch_bridge_commands(
             yield process_bridge_command(
                 command_path=path,
                 bridge_root=layout.root,
-                obsidian_inbox=obsidian_inbox,
+                obsidian_inbox=inbox,
                 settings=cfg,
                 notion_registrar=registrar,
             )
