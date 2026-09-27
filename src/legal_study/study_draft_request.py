@@ -168,6 +168,16 @@ def build_study_draft_request_bundle(
     problem_validation = _read_json_object(validation_path)
     if problem_validation.get("valid") is not True:
         raise ValueError("problem_validation.json is not valid=true")
+    expected_hashes = {
+        "canonical_sha256": canonical_path,
+        "handoff_markdown_sha256": handoff_path,
+    }
+    for field, artifact_path in expected_hashes.items():
+        actual_hash = hashlib.sha256(artifact_path.read_bytes()).hexdigest()
+        if problem_validation.get(field) != actual_hash:
+            raise ValueError(
+                f"problem_validation.json {field} does not match {artifact_path.name}"
+            )
     _validate_bundle_source_identity(
         subject=subject,
         question=question,

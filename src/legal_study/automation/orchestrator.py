@@ -396,7 +396,17 @@ def recover_watch_startup(
     cfg.ensure()
     source_path = str(Path(pdf).expanduser().resolve())
     automation_state = AutomationStateStore(cfg.state_db)
-    recovered = automation_state.recover_interrupted()
+    from legal_study.automation.watch_lock import WatchLock
+
+    try:
+        queue_lock = WatchLock(cfg.home, "queue", cfg.state_db)
+    except BlockingIOError:
+        recovered = 0
+    else:
+        try:
+            recovered = automation_state.recover_interrupted()
+        finally:
+            queue_lock.close()
 
     current_index, stable = establish_stable_baseline(
         pdf,

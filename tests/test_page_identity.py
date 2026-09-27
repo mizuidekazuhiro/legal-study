@@ -5,6 +5,7 @@ import pymupdf
 from legal_study.page_identity import (
     align_page_indexes,
     build_source_page_index,
+    page_identity_from_components,
 )
 from legal_study.settings import LocalSettings
 from legal_study.source_store import snapshot_source
@@ -65,3 +66,25 @@ def test_page_alignment_survives_insertion_move_and_markup_change(tmp_path: Path
     assert by_current[3].classification == "MOVED_MARKUP_CHANGED"
     assert by_current[3].markup_changed is True
     assert by_current[3].safe_for_base_ocr_reuse is True
+
+
+def test_vector_only_pages_have_distinct_stable_identity() -> None:
+    common = {
+        "page_number": 1,
+        "width": 300.0,
+        "height": 200.0,
+        "rotation": 0,
+        "native_text": "",
+        "image_payload": [],
+        "annotation_payload": [],
+    }
+    first = page_identity_from_components(
+        **common,
+        vector_payload=[{"path": "glyph-a"}],
+    )
+    second = page_identity_from_components(
+        **common,
+        vector_payload=[{"path": "glyph-b"}],
+    )
+
+    assert first.stable_page_id != second.stable_page_id

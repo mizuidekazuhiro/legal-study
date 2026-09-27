@@ -92,6 +92,7 @@ review_issue_count: 1
         encoding="utf-8",
         newline="\n",
     )
+    _refresh_validation_hashes(run_dir)
     (run_dir / "handoff_review/page-0110-review.png").write_bytes(
         b"review-sheet-110"
     )
@@ -102,6 +103,25 @@ review_issue_count: 1
             f"# instruction {index}\n{name}\n",
             encoding="utf-8",
         )
+
+
+def _refresh_validation_hashes(run_dir: Path) -> None:
+    canonical_path = run_dir / "canonical_source.json"
+    handoff_path = run_dir / "criminal_22_handoff.md"
+    (run_dir / "problem_validation.json").write_text(
+        json.dumps(
+            {
+                "valid": True,
+                "canonical_sha256": hashlib.sha256(
+                    canonical_path.read_bytes()
+                ).hexdigest(),
+                "handoff_markdown_sha256": hashlib.sha256(
+                    handoff_path.read_bytes()
+                ).hexdigest(),
+            }
+        ),
+        encoding="utf-8",
+    )
 
 
 def test_build_bundle_contains_exact_inputs_and_response_schema(tmp_path: Path) -> None:
@@ -207,6 +227,24 @@ def test_invalid_problem_packet_stops_bundle_creation(tmp_path: Path) -> None:
         )
 
 
+def test_artifact_changed_after_validation_stops_bundle_creation(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    instruction_dir = tmp_path / "instructions"
+    run_dir.mkdir()
+    _write_inputs(run_dir, instruction_dir)
+    canonical_path = run_dir / "canonical_source.json"
+    canonical_path.write_bytes(canonical_path.read_bytes() + b"\n")
+
+    with pytest.raises(ValueError, match="canonical_sha256 does not match"):
+        build_study_draft_request_bundle(
+            subject="criminal",
+            question="22",
+            source=_source(),
+            run_dir=run_dir,
+            instruction_dir=instruction_dir,
+        )
+
+
 def test_all_page_null_identity_normalizes_to_canonical_page_list(
     tmp_path: Path,
 ) -> None:
@@ -228,6 +266,7 @@ def test_all_page_null_identity_normalizes_to_canonical_page_list(
         encoding="utf-8",
         newline="\n",
     )
+    _refresh_validation_hashes(run_dir)
 
     bundle = build_study_draft_request_bundle(
         subject="criminal",
@@ -253,6 +292,7 @@ def test_handoff_identity_mismatch_stops_bundle_creation(tmp_path: Path) -> None
         ),
         encoding="utf-8",
     )
+    _refresh_validation_hashes(run_dir)
 
     with pytest.raises(ValueError, match="Bundle source identity mismatch"):
         build_study_draft_request_bundle(
@@ -330,6 +370,7 @@ def test_logical_marker_may_omit_evidence_image(tmp_path: Path) -> None:
         json.dumps(canonical, ensure_ascii=False),
         encoding="utf-8",
     )
+    _refresh_validation_hashes(run_dir)
 
     bundle = build_study_draft_request_bundle(
         subject="criminal",

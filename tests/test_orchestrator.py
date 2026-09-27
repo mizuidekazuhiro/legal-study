@@ -10,6 +10,7 @@ from legal_study.automation.orchestrator import (
     watch_pdf_updates,
 )
 from legal_study.automation.queue import AutomationStateStore, WorkStatus
+from legal_study.automation.watch_lock import WatchLock
 from legal_study.completion.done_marker import done_stamp_png_bytes
 from legal_study.page_identity import ensure_source_page_index
 from legal_study.pdf.ocr.base import OcrLine, OcrResult
@@ -243,6 +244,41 @@ def test_restart_recovery_returns_running_queue_item_to_pending(tmp_path: Path) 
     pending = automation.list_pending()
     assert len(pending) == 1
     assert pending[0].question == "21"
+
+
+def test_restart_recovery_does_not_requeue_item_owned_by_active_worker(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.pdf"
+    settings = LocalSettings(home=tmp_path / "home")
+    _write_pdf(source)
+    snapshot = snapshot_source(source, settings=settings)
+    baseline = ensure_source_page_index(snapshot, settings.cache_dir)
+    automation = AutomationStateStore(settings.state_db)
+    automation.set_watch_baseline("criminal", source, baseline.source_sha256)
+    queued = automation.enqueue(
+        subject="criminal",
+        question="21",
+        source_sha256="old-sha",
+        stable_page_ids=["p1"],
+    )
+    automation.claim_next()
+    active_worker = WatchLock(settings.home, "queue", settings.state_db)
+    try:
+        _current, result = recover_watch_startup(
+            source,
+            subject="criminal",
+            ocr_engine=HeaderOcr(),
+            settings=settings,
+            stability_interval_seconds=0,
+            stability_equal_observations=2,
+            stability_timeout_seconds=1,
+        )
+    finally:
+        active_worker.close()
+
+    assert result.recovered_work_items == 0
+    assert automation.get_work_item(queued.id).status == WorkStatus.RUNNING
 
 
 def test_restart_reestablishes_missing_persisted_page_index(tmp_path: Path) -> None:

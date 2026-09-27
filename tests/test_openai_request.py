@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import json
 from pathlib import Path
 
@@ -99,6 +100,22 @@ review_issue_count: 1
 
 講師答案本文
 """,
+        encoding="utf-8",
+    )
+    canonical_path = run_dir / "canonical_source.json"
+    handoff_path = run_dir / "criminal_22_handoff.md"
+    (run_dir / "problem_validation.json").write_text(
+        json.dumps(
+            {
+                "valid": True,
+                "canonical_sha256": hashlib.sha256(
+                    canonical_path.read_bytes()
+                ).hexdigest(),
+                "handoff_markdown_sha256": hashlib.sha256(
+                    handoff_path.read_bytes()
+                ).hexdigest(),
+            }
+        ),
         encoding="utf-8",
     )
     (run_dir / "handoff_review/page-0110-review.png").write_bytes(

@@ -84,6 +84,31 @@ def process_next_work_item(
     settings: LocalSettings | None = None,
     bridge_root: Path | None = None,
 ) -> QueueWorkerResult:
+    """Process one item while holding the cross-process queue serialization lock."""
+    from legal_study.automation.watch_lock import WatchLock
+
+    cfg = settings or LocalSettings()
+    cfg.ensure()
+    try:
+        queue_lock = WatchLock(cfg.home, "queue", cfg.state_db)
+    except BlockingIOError:
+        return QueueWorkerResult(claimed=False, reason="QUEUE_BUSY")
+    try:
+        return _process_next_work_item_unlocked(
+            pipeline=pipeline,
+            settings=cfg,
+            bridge_root=bridge_root,
+        )
+    finally:
+        queue_lock.close()
+
+
+def _process_next_work_item_unlocked(
+    *,
+    pipeline: PdfIngestPipeline,
+    settings: LocalSettings | None = None,
+    bridge_root: Path | None = None,
+) -> QueueWorkerResult:
     """Claim and process exactly one queued question.
 
     The queue remains the serialization boundary. Question state advances to
@@ -95,6 +120,9 @@ def process_next_work_item(
     queue = AutomationStateStore(cfg.state_db)
     questions = QuestionStateStore(cfg.state_db)
 
+    # Holding the queue lock proves no live worker owns a RUNNING row. This also
+    # recovers an item when startup initially observed another worker that later died.
+    queue.recover_interrupted()
     item = queue.claim_next()
     if item is None:
         return QueueWorkerResult(

@@ -166,6 +166,9 @@ def page_identity_from_components(
     image_fingerprint = _hash_payload(image_payload)
     vector_fingerprint = _hash_payload(vector_payload)
     annotation_fingerprint = _hash_payload(annotation_payload)
+    vector_only_fingerprint = (
+        vector_fingerprint if not normalized_text and not image_payload else None
+    )
     base_content_hash = _hash_payload(
         {
             "width": round(width, 3),
@@ -173,6 +176,7 @@ def page_identity_from_components(
             "rotation": rotation,
             "text_fingerprint": text_fingerprint,
             "image_fingerprint": image_fingerprint,
+            "vector_only_fingerprint": vector_only_fingerprint,
         }
     )
     return PageIdentityRecord(
