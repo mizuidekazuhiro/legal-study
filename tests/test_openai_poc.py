@@ -279,6 +279,7 @@ def test_one_question_poc_calls_responses_once_and_accepts_candidate(tmp_path: P
     assert request["store"] is False
     assert request["background"] is True
     assert request["max_output_tokens"] == 64000
+    assert request["extra_headers"]["Idempotency-Key"].startswith("legal-study-")
     assert request["text"]["format"]["type"] == "json_schema"
     assert request["input"][0]["content"][1]["type"] == "input_image"
 
@@ -644,3 +645,42 @@ def test_background_response_resumes_from_failed_poll_without_second_create(
     assert result.accepted is True
     assert responses.create_calls == 0
     assert responses.retrieve_calls == ["resp_test_123"]
+
+
+def test_calling_receipt_reuses_stable_idempotency_key_after_crash(
+    tmp_path: Path,
+) -> None:
+    run_dir, bundle = _bundle(tmp_path)
+    seen_keys = []
+
+    class CrashResponses:
+        def create(self, **kwargs):
+            seen_keys.append(kwargs["extra_headers"]["Idempotency-Key"])
+            raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        run_openai_study_draft_poc(
+            bundle=bundle,
+            run_dir=run_dir,
+            client=SimpleNamespace(responses=CrashResponses()),
+        )
+
+    completed = _response(
+        status="completed",
+        output_text=json.dumps(_draft_payload(bundle), ensure_ascii=False),
+    )
+
+    class ResumeResponses:
+        def create(self, **kwargs):
+            seen_keys.append(kwargs["extra_headers"]["Idempotency-Key"])
+            return completed
+
+    result = run_openai_study_draft_poc(
+        bundle=bundle,
+        run_dir=run_dir,
+        client=SimpleNamespace(responses=ResumeResponses()),
+    )
+
+    assert result.accepted is True
+    assert len(seen_keys) == 2
+    assert seen_keys[0] == seen_keys[1]

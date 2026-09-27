@@ -82,8 +82,13 @@ def build_study_draft_bundle_from_run(
     manifest = RunManifest.model_validate_json(
         manifest_path.read_text(encoding="utf-8")
     )
-    if not manifest.requested_pages:
-        raise RuntimeError("Run manifest has no requested_pages")
+    requested_pages = (
+        list(manifest.requested_pages)
+        if manifest.requested_pages is not None
+        else list(range(1, (manifest.page_count or 0) + 1))
+    )
+    if not requested_pages:
+        raise RuntimeError("Run manifest has no resolvable source pages")
 
     cfg = settings or LocalSettings()
     cfg.ensure()
@@ -104,7 +109,7 @@ def build_study_draft_bundle_from_run(
         source_sha256=manifest.source.sha256,
         source_snapshot_path=str(manifest.source.snapshot_path),
         stable_page_ids=question.stable_page_ids,
-        requested_pages=manifest.requested_pages,
+        requested_pages=requested_pages,
         run_id=manifest.run_id,
         handoff_path=handoff_markdown_filename(
             manifest.subject,
@@ -162,6 +167,10 @@ def run_openai_study_draft_poc(
         }
     )
     request_hash = _request_sha256(request_payload)
+    create_payload = {
+        **request_payload,
+        "extra_headers": {"Idempotency-Key": f"legal-study-{request_hash}"},
+    }
     api_client = client if client is not None else _default_openai_client()
 
     receipt: dict[str, Any] | None = None
@@ -170,29 +179,38 @@ def run_openai_study_draft_poc(
         if not isinstance(loaded, dict):
             raise RuntimeError("API receipt must contain a JSON object")
         receipt = loaded
-        if receipt.get("state") not in {"IN_PROGRESS", "POLL_TIMEOUT", "POLL_FAILED"}:
+        receipt_state = receipt.get("state")
+        if receipt_state not in {
+            "CALLING",
+            "IN_PROGRESS",
+            "POLL_TIMEOUT",
+            "POLL_FAILED",
+        }:
             raise RuntimeError(
                 "API receipt already exists; refusing a second API call for this run"
             )
         if receipt.get("request_sha256") != request_hash:
             raise RuntimeError("Resumable API receipt request hash does not match")
-        response_id = receipt.get("response_id")
-        if not isinstance(response_id, str) or not response_id:
-            raise RuntimeError("Resumable API receipt has no response_id")
         started_at = str(receipt.get("started_at") or datetime.now(UTC).isoformat())
-        try:
-            response = api_client.responses.retrieve(response_id)
-        except Exception as exc:
-            _write_poll_failure_receipt(
-                receipt_path=receipt_path,
-                started_at=started_at,
-                request_hash=request_hash,
-                config=cfg,
-                response_id=response_id,
-                response_status=str(receipt.get("response_status") or "unknown"),
-                error=exc,
-            )
-            raise
+        if receipt_state == "CALLING":
+            response = api_client.responses.create(**create_payload)
+        else:
+            response_id = receipt.get("response_id")
+            if not isinstance(response_id, str) or not response_id:
+                raise RuntimeError("Resumable API receipt has no response_id")
+            try:
+                response = api_client.responses.retrieve(response_id)
+            except Exception as exc:
+                _write_poll_failure_receipt(
+                    receipt_path=receipt_path,
+                    started_at=started_at,
+                    request_hash=request_hash,
+                    config=cfg,
+                    response_id=response_id,
+                    response_status=str(receipt.get("response_status") or "unknown"),
+                    error=exc,
+                )
+                raise
     else:
         started_at = datetime.now(UTC).isoformat()
         atomic_write_json(
@@ -213,7 +231,7 @@ def run_openai_study_draft_poc(
             },
         )
         try:
-            response = api_client.responses.create(**request_payload)
+            response = api_client.responses.create(**create_payload)
         except Exception as exc:
             atomic_write_json(
                 receipt_path,
