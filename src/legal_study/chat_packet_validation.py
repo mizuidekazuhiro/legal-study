@@ -212,6 +212,14 @@ def validate_chat_packet_structure(packet: Path) -> dict[str, Any]:
                             "exact_text"
                         )
                     auto_verified = marker.get("review_status") == "AUTO_VERIFIED"
+                    statuses_valid = (
+                        marker.get("review_status")
+                        in {"AUTO_VERIFIED", "NEEDS_REVIEW"}
+                        and marker.get("position_status")
+                        in {"VERIFIED", "NEEDS_REVIEW"}
+                        and marker.get("text_accuracy_status")
+                        in {"VERIFIED", "NEEDS_REVIEW"}
+                    )
                     reference_source_valid = (
                         reference.get("field") == "canonical_text"
                         and reference.get("source") == page.get("source")
@@ -236,6 +244,7 @@ def validate_chat_packet_structure(packet: Path) -> dict[str, Any]:
                         and reference_source_valid
                         and range_semantics_valid
                         and marker_range_semantics_valid
+                        and statuses_valid
                         and range_valid
                         and auto_verified_consistent
                         and (

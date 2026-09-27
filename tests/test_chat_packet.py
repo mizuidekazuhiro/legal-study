@@ -619,6 +619,38 @@ def test_v2_packet_rejects_auto_verified_independent_ocr_marker(
         validate_chat_packet_structure(tampered)
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("review_status", "VERIFIED"),
+        ("position_status", "UNKNOWN"),
+        ("text_accuracy_status", None),
+    ],
+)
+def test_v2_packet_rejects_unknown_marker_status(
+    tmp_path: Path, field: str, value: str | None
+) -> None:
+    run = _run(tmp_path)
+    _upgrade_run_to_v2(run)
+    result = build_chat_packet(run_dir=run)
+    packet = Path(result.packet_path)
+    tampered = tmp_path / f"unknown-{field}.zip"
+
+    with zipfile.ZipFile(packet) as source, zipfile.ZipFile(
+        tampered, "w", compression=zipfile.ZIP_DEFLATED
+    ) as target:
+        for name in source.namelist():
+            payload = source.read(name)
+            if name == "marker_index.json":
+                marker_payload = json.loads(payload)
+                marker_payload["logical_markers"][0][field] = value
+                payload = json.dumps(marker_payload, ensure_ascii=False).encode("utf-8")
+            target.writestr(name, payload)
+
+    with pytest.raises(RuntimeError, match="structural validation failed"):
+        validate_chat_packet_structure(tampered)
+
+
 
 @pytest.mark.parametrize("tamper_level", ["payload", "marker"])
 def test_v2_packet_rejects_changed_range_semantics(

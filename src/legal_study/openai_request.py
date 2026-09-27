@@ -390,12 +390,17 @@ def _render_user_input(bundle: StudyDraftRequestBundle) -> str:
                     f"{marker.canonical_end_char_exclusive}"
                 )
             )
+            legacy_range = (
+                "null"
+                if marker.start_char is None or marker.end_char is None
+                else f"{marker.start_char}-{marker.end_char}"
+            )
             lines.append(
                 "- "
                 f"{marker.id} | page={marker.page_number} | color={marker.color} | "
                 f"canonical_chars={canonical_range} | "
                 f"range_semantics={marker.character_range_semantics or 'null'} | "
-                f"legacy_native_chars={marker.start_char}-{marker.end_char} | "
+                f"legacy_native_chars={legacy_range} | "
                 f"review_status={marker.review_status} | "
                 f"boundary_confidence={marker.boundary_confidence} | "
                 f"evidence_image={marker.evidence_image or 'null'} | "
