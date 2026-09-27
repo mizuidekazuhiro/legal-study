@@ -25,6 +25,13 @@ the supervisor remains alive. The initial configuration does not reprocess old
 PDFs. Bridge commands retain their existing explicit-approval rules;
 Notion integration is not enabled by this service.
 
+`ObsidianInboxRelay` is also an interactive-user task because its source is on
+the same `G:` mount. Keep its delayed logon trigger and five-minute recovery
+trigger together, with IgnoreNew and unlimited runtime. A forcibly terminated
+PowerShell action can be recorded as a completed action instead of activating
+RestartOnFailure, so the periodic trigger is the outer recovery guarantee for
+both resident tasks.
+
 The service and both CLI watcher commands hold OS file locks. Lock files are
 small and persistent, but locks are released by Windows on normal or abnormal
 exit. A Windows Job object owns the children, preventing orphan watchers when
