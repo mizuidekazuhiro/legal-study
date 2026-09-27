@@ -3,17 +3,17 @@ from __future__ import annotations
 
 import argparse
 import ctypes
-from ctypes import wintypes
 import json
 import logging
-from logging.handlers import RotatingFileHandler
 import os
-from pathlib import Path
 import signal
 import subprocess
 import sys
 import threading
 import time
+from ctypes import wintypes
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 from .watch_lock import WatchLock
 
