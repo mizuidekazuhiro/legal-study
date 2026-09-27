@@ -7,6 +7,7 @@ from typing import Any
 from PIL import Image, ImageDraw, ImageOps
 
 from legal_study.io_utils import atomic_output_path
+from legal_study.page_geometry import pdf_bbox_to_rendered_bbox
 
 
 def _safe_run_path(run_dir: Path, reference: str) -> Path:
@@ -29,6 +30,7 @@ def _write_marker_crop(
     page_path: Path,
     page_width: float,
     page_height: float,
+    page_rotation: int,
     marker: dict[str, Any],
     output: Path,
 ) -> None:
@@ -39,6 +41,12 @@ def _write_marker_crop(
     stroke_width = float(marker.get("stroke_width") or 0.0)
     paint_padding = stroke_width / 2 if marker.get("paint") == "stroke" else 0.0
     context = max(12.0, paint_padding + 4.0)
+    x0, y0, x1, y1 = pdf_bbox_to_rendered_bbox(
+        (x0, y0, x1, y1),
+        rendered_page_width=page_width,
+        rendered_page_height=page_height,
+        page_rotation=page_rotation,
+    )
     with Image.open(page_path) as source:
         image = source.convert("RGB")
     scale_x = image.width / max(page_width, 1.0)
@@ -188,6 +196,7 @@ def create_handoff_review_sheets(
                 page_path=page_path,
                 page_width=float(page.get("page_width") or 1.0),
                 page_height=float(page.get("page_height") or 1.0),
+                page_rotation=int(page.get("page_rotation") or 0),
                 marker=marker,
                 output=crop_path,
             )
