@@ -651,6 +651,32 @@ def test_v2_packet_rejects_unknown_marker_status(
         validate_chat_packet_structure(tampered)
 
 
+def test_v2_packet_rejects_marker_evidence_from_unrelated_member(
+    tmp_path: Path,
+) -> None:
+    run = _run(tmp_path)
+    _upgrade_run_to_v2(run)
+    result = build_chat_packet(run_dir=run)
+    packet = Path(result.packet_path)
+    tampered = tmp_path / "wrong-marker-evidence.zip"
+
+    with zipfile.ZipFile(packet) as source, zipfile.ZipFile(
+        tampered, "w", compression=zipfile.ZIP_DEFLATED
+    ) as target:
+        for name in source.namelist():
+            payload = source.read(name)
+            if name == "marker_index.json":
+                marker_payload = json.loads(payload)
+                marker_payload["logical_markers"][0]["evidence_image"] = (
+                    "packet_manifest.json"
+                )
+                payload = json.dumps(marker_payload, ensure_ascii=False).encode("utf-8")
+            target.writestr(name, payload)
+
+    with pytest.raises(RuntimeError, match="structural validation failed"):
+        validate_chat_packet_structure(tampered)
+
+
 
 @pytest.mark.parametrize("tamper_level", ["payload", "marker"])
 def test_v2_packet_rejects_changed_range_semantics(

@@ -238,6 +238,9 @@ def validate_chat_packet_structure(packet: Path) -> dict[str, Any]:
                             and page.get("source") == "reconciled_text"
                         )
                     )
+                    expected_evidence = (
+                        f"review/page-{int(marker['page_number']):04d}-review.png"
+                    )
                     marker_refs_valid = marker_refs_valid and (
                         digest == page.get("text_sha256") == reference.get("text_sha256")
                         and int(reference.get("page_number", -1)) == int(marker["page_number"])
@@ -249,7 +252,7 @@ def validate_chat_packet_structure(packet: Path) -> dict[str, Any]:
                         and auto_verified_consistent
                         and (
                             auto_verified
-                            or marker.get("evidence_image") in names
+                            or marker.get("evidence_image") == expected_evidence
                         )
                     )
             checks = {
