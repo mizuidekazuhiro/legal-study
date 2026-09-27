@@ -135,7 +135,6 @@ def _assess_question_start(
         _QUESTION_HEADER.search(line).group(1)  # type: ignore[union-attr]
         for line in title_lines
     ]
-    header_line = title_lines[0]
     if None in questions or len(set(questions)) != 1:
         return QuestionStartCandidate(
             page_number=page_number,
@@ -146,8 +145,9 @@ def _assess_question_start(
         )
     question = questions[0]
     assert question is not None
-    auxiliary_heading = any(role in header_line for role in _AUXILIARY_ROLES)
-    if auxiliary_heading:
+    has_problem_cue = any(cue in normalized for cue in _PROBLEM_CUES)
+    auxiliary_heading = any(role in normalized for role in _AUXILIARY_ROLES)
+    if auxiliary_heading and not has_problem_cue:
         return QuestionStartCandidate(
             page_number=page_number,
             question=question,
@@ -156,7 +156,6 @@ def _assess_question_start(
             text=text,
             confidence=confidence,
         )
-    has_problem_cue = any(cue in normalized for cue in _PROBLEM_CUES)
     reasons = ["exact_question_heading"]
     if re.search(rf"(?<!\d){re.escape(question)}\s*[-－]\s*1(?!\d)", normalized):
         reasons.append("booklet_part_1")

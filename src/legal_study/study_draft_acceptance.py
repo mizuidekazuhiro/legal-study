@@ -90,6 +90,15 @@ def accept_study_draft_response(
 
     issues.extend(_review_gate_issues(draft))
 
+    if draft.subject == "criminal" and not draft.anki_cards:
+        issues.append(
+            StudyDraftAcceptanceIssue(
+                code="ANKI_CARDS_MISSING",
+                message="Criminal-law study drafts must contain approved Anki card candidates",
+                location="anki_cards",
+            )
+        )
+
     if issues:
         return StudyDraftAcceptanceResult(
             accepted=False,

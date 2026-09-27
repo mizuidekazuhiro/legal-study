@@ -21,6 +21,7 @@ class ChatResultSource(StrictChatResultModel):
     question: str = Field(min_length=1)
     source_sha256: str = Field(min_length=64, max_length=64)
     requested_pages: list[int]
+    run_id: str | None = Field(default=None, min_length=64, max_length=64)
 
 
 class ChatAnkiCard(StrictChatResultModel):
@@ -101,6 +102,7 @@ def validate_chat_result(
     result_path: Path,
     run_dir: Path,
     validation_scope: ValidationScope = "full",
+    expected_run_id: str | None = None,
 ) -> ChatResultValidationReport:
     result_file = result_path.expanduser().resolve()
     root = run_dir.expanduser().resolve()
@@ -113,6 +115,18 @@ def validate_chat_result(
     )
 
     issues: list[str] = []
+
+    if expected_run_id is not None:
+        if result.source.run_id is not None:
+            if result.source.run_id != expected_run_id:
+                issues.append("SOURCE_RUN_ID_MISMATCH")
+        else:
+            expected_name = (
+                f"{manifest.subject}-q{manifest.question}-{manifest.source.sha256}-"
+                f"{expected_run_id}.study_result.json"
+            )
+            if result_file.name != expected_name:
+                issues.append("SOURCE_RUN_ID_UNBOUND")
 
     if result.source.subject != manifest.subject:
         issues.append("SOURCE_SUBJECT_MISMATCH")

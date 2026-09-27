@@ -470,6 +470,7 @@ def process_bridge_command(
             result_path=result_path,
             run_dir=run_dir,
             validation_scope=validation_scope,
+            expected_run_id=command.run_id,
         )
         if not validation.valid:
             raise RuntimeError("Chat result validation failed: " + ", ".join(validation.issues))

@@ -52,7 +52,9 @@ def _write_run(settings: LocalSettings) -> tuple[Path, str, str]:
     return run, run_id, source_sha
 
 
-def _write_result(path: Path, source_sha: str, *, include_cards: bool = True) -> None:
+def _write_result(
+    path: Path, source_sha: str, run_id: str, *, include_cards: bool = True
+) -> None:
     payload = {
         "schema_version": "chat_study_result.v1",
         "source": {
@@ -60,6 +62,7 @@ def _write_result(path: Path, source_sha: str, *, include_cards: bool = True) ->
             "question": "16",
             "source_sha256": source_sha,
             "requested_pages": [200],
+            "run_id": run_id,
         },
         "reviewed_pages": [200],
         "unresolved": [],
@@ -105,7 +108,7 @@ def test_obsidian_command_is_idempotent_and_receipted(tmp_path: Path) -> None:
         (bridge / name).mkdir(parents=True)
 
     result_file = bridge / "10_approved" / "criminal-q16.json"
-    _write_result(result_file, source_sha)
+    _write_result(result_file, source_sha, run_id)
     result_sha = file_sha256(result_file)
 
     command = {
@@ -166,7 +169,7 @@ def test_success_receipt_restores_missing_local_ledger(
     for name in ("10_approved", "20_commands", "30_receipts", "99_failed"):
         (bridge / name).mkdir(parents=True)
     result_file = bridge / "10_approved" / "result.json"
-    _write_result(result_file, source_sha)
+    _write_result(result_file, source_sha, run_id)
     command = BridgeCommand(
         command_id="restore-001", action="apply_obsidian", subject="criminal",
         question="16", source_sha256=source_sha, run_id=run_id,
@@ -242,7 +245,7 @@ def test_obsidian_only_command_does_not_require_anki_payload(tmp_path: Path) -> 
     for name in ("10_approved", "20_commands", "30_receipts", "99_failed"):
         (bridge / name).mkdir(parents=True)
     result_file = bridge / "10_approved" / "criminal-q16.json"
-    _write_result(result_file, source_sha, include_cards=False)
+    _write_result(result_file, source_sha, run_id, include_cards=False)
     command = {
         "schema_version": "chat_bridge_command.v1",
         "command_id": "criminal-q16-obsidian-only-001",
@@ -282,7 +285,7 @@ def test_result_hash_mismatch_is_receipted_without_writing_obsidian(tmp_path: Pa
     for name in ("10_approved", "20_commands", "30_receipts", "99_failed"):
         (bridge / name).mkdir(parents=True)
     result_file = bridge / "10_approved" / "criminal-q16.json"
-    _write_result(result_file, source_sha)
+    _write_result(result_file, source_sha, run_id)
     command = {
         "schema_version": "chat_bridge_command.v1",
         "command_id": "criminal-q16-bad-hash-001",
@@ -323,7 +326,7 @@ def test_command_source_mismatch_is_receipted_without_writing_obsidian(tmp_path:
         (bridge / name).mkdir(parents=True)
 
     result_file = bridge / "10_approved" / "approved.json"
-    _write_result(result_file, source_sha)
+    _write_result(result_file, source_sha, run_id)
     command = {
         "schema_version": "chat_bridge_command.v1",
         "command_id": "source-mismatch-001",
@@ -365,7 +368,7 @@ def test_notion_command_requires_explicit_authorization(tmp_path: Path) -> None:
         (bridge / name).mkdir(parents=True)
 
     result_file = bridge / "10_approved" / "criminal-q16.json"
-    _write_result(result_file, source_sha)
+    _write_result(result_file, source_sha, run_id)
 
     command = {
         "schema_version": "chat_bridge_command.v1",
@@ -449,7 +452,7 @@ def test_invalid_result_fails_before_any_external_action(
     for name in ("10_approved", "20_commands", "30_receipts", "99_failed"):
         (bridge / name).mkdir(parents=True)
     result_file = bridge / "10_approved" / "invalid.json"
-    _write_result(result_file, source_sha)
+    _write_result(result_file, source_sha, run_id)
     payload = json.loads(result_file.read_text(encoding="utf-8"))
     payload["unresolved"] = ["要確認"]
     result_file.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
@@ -605,7 +608,7 @@ def test_notion_factory_failure_is_receipted(tmp_path: Path) -> None:
     for name in ("10_approved", "20_commands", "30_receipts", "99_failed"):
         (bridge / name).mkdir(parents=True)
     result_file = bridge / "10_approved" / "result.json"
-    _write_result(result_file, source_sha)
+    _write_result(result_file, source_sha, run_id)
     command = BridgeCommand(
         command_id="notion-init-001", action="register_notion", subject="criminal",
         question="16", source_sha256=source_sha, run_id=run_id,

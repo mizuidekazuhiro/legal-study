@@ -121,6 +121,39 @@ def test_valid_chat_result_binds_to_exact_run(tmp_path: Path) -> None:
     assert report.common_rule_card_count == 1
 
 
+def test_legacy_result_filename_must_bind_to_expected_run(tmp_path: Path) -> None:
+    run = _run(tmp_path)
+    payload = _payload()
+    result_file = tmp_path / "unbound.study_result.json"
+    result_file.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    report = validate_chat_result(
+        result_path=result_file,
+        run_dir=run,
+        expected_run_id="r" * 64,
+    )
+
+    assert report.valid is False
+    assert "SOURCE_RUN_ID_UNBOUND" in report.issues
+
+
+def test_result_source_run_id_must_match_expected_run(tmp_path: Path) -> None:
+    run = _run(tmp_path)
+    payload = _payload()
+    payload["source"]["run_id"] = "x" * 64
+    result_file = tmp_path / "result.json"
+    result_file.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    report = validate_chat_result(
+        result_path=result_file,
+        run_dir=run,
+        expected_run_id="r" * 64,
+    )
+
+    assert report.valid is False
+    assert "SOURCE_RUN_ID_MISMATCH" in report.issues
+
+
 def test_obsidian_only_validation_accepts_no_cards_but_full_validation_does_not(
     tmp_path: Path,
 ) -> None:

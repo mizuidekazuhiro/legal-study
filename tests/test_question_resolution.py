@@ -93,6 +93,33 @@ def test_resolver_uses_nearest_preceding_exact_question_header(tmp_path: Path) -
     assert engine.calls == [5, 4]
 
 
+def test_auxiliary_role_on_separate_line_is_not_problem_start(tmp_path: Path) -> None:
+    pdf = tmp_path / "source.pdf"
+    _question_pdf(pdf)
+    engine = HeaderOcr({2: "第26問\n問題文を読み罪責を論ぜよ", 4: "第26問\n答案例"})
+
+    resolved = resolve_question_for_done_page(
+        pdf, 5, ocr_engine=engine, temp_dir=tmp_path / "tmp", max_backtrack=5
+    )
+
+    assert resolved.resolved is True
+    assert resolved.start_page == 2
+    assert resolved.candidates[0].decision == "REJECT_AUXILIARY_HEADING"
+
+
+def test_problem_text_and_guidance_on_same_page_remains_valid_start(tmp_path: Path) -> None:
+    pdf = tmp_path / "source.pdf"
+    _question_pdf(pdf)
+    engine = HeaderOcr({4: "第27問\n次の事例の罪責を論ぜよ\n指針"})
+
+    resolved = resolve_question_for_done_page(
+        pdf, 5, ocr_engine=engine, temp_dir=tmp_path / "tmp", max_backtrack=3
+    )
+
+    assert resolved.resolved is True
+    assert resolved.start_page == 4
+
+
 def test_apply_done_marker_sets_question_done_detected(tmp_path: Path) -> None:
     pdf = tmp_path / "source.pdf"
     _question_pdf(pdf)
