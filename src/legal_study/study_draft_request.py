@@ -413,13 +413,23 @@ def _validate_bundle_source_identity(
     canonical_source = canonical.get("source")
     if not isinstance(canonical_source, dict):
         raise TypeError("canonical_source.json has no source object")
+    canonical_requested = canonical_source.get("requested_pages")
+    if canonical_requested is None:
+        canonical_requested = [
+            int(page["page_number"])
+            for page in canonical.get("pages", [])
+            if isinstance(page, dict) and "page_number" in page
+        ]
+    handoff_pages = handoff_frontmatter.get("source_pages")
+    if handoff_pages is None:
+        handoff_pages = canonical_requested
 
     comparisons = {
         "subject": (canonical.get("subject"), subject),
         "question": (canonical.get("question"), question),
         "source_sha256": (canonical_source.get("sha256"), source.source_sha256),
         "requested_pages": (
-            canonical_source.get("requested_pages"),
+            canonical_requested,
             source.requested_pages,
         ),
     }
@@ -436,7 +446,7 @@ def _validate_bundle_source_identity(
             source.source_sha256,
         ),
         "source_pages": (
-            handoff_frontmatter.get("source_pages"),
+            handoff_pages,
             source.requested_pages,
         ),
     }
@@ -450,6 +460,7 @@ def _validate_bundle_source_identity(
 
 
 def _read_yaml_frontmatter(text: str, name: str) -> dict[str, Any]:
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
     if not text.startswith("---\n"):
         raise ValueError(f"Handoff has no YAML frontmatter: {name}")
     end = text.find("\n---\n", 4)

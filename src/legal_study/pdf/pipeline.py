@@ -11,6 +11,7 @@ import pymupdf
 
 from legal_study.io_utils import atomic_output_path, atomic_write_json, file_sha256
 from legal_study.models import BBox, DocumentInspection
+from legal_study.page_geometry import pdf_bbox_to_rendered_bbox
 from legal_study.page_identity import (
     PageAlignment,
     align_page_indexes,
@@ -953,7 +954,13 @@ class PdfIngestPipeline:
         assert page.rendered_image is not None
         image_path = self._resolve_artifact(out, page.rendered_image)
         pixmap = pymupdf.Pixmap(str(image_path))
-        bbox = BBox(x0=0.0, y0=0.0, x1=page.width, y1=page.height)
+        rendered_bbox = BBox(x0=0.0, y0=0.0, x1=page.width, y1=page.height)
+        pdf_width, pdf_height = (
+            (page.height, page.width)
+            if page.rotation % 180
+            else (page.width, page.height)
+        )
+        pdf_bbox = BBox(x0=0.0, y0=0.0, x1=pdf_width, y1=pdf_height)
         return self._target_metadata(
             kind="full_page",
             page_number=page.page_number,
@@ -961,7 +968,10 @@ class PdfIngestPipeline:
             image_path=image_path,
             image_width=pixmap.width,
             image_height=pixmap.height,
-            bbox=bbox,
+            rendered_bbox=rendered_bbox,
+            pdf_bbox=pdf_bbox,
+            rendered_page_width=page.width,
+            rendered_page_height=page.height,
             dpi=self.inspector.render_dpi,
             padding=0.0,
             page_rotation=page.rotation,
@@ -1304,27 +1314,54 @@ class PdfIngestPipeline:
         image_path: Path,
         image_width: int,
         image_height: int,
-        bbox: BBox,
+        rendered_bbox: BBox,
+        pdf_bbox: BBox,
+        rendered_page_width: float,
+        rendered_page_height: float,
         dpi: int,
         padding: float,
         page_rotation: int,
         reason: str,
         extra: dict[str, object] | None = None,
     ) -> dict[str, object]:
-        scale_x = (bbox.x1 - bbox.x0) / image_width
-        scale_y = (bbox.y1 - bbox.y0) / image_height
+        scale_x = (rendered_bbox.x1 - rendered_bbox.x0) / image_width
+        scale_y = (rendered_bbox.y1 - rendered_bbox.y0) / image_height
+        rotation = page_rotation % 360
+        if rotation == 0:
+            pixel_to_pdf = (
+                scale_x, 0.0, 0.0, scale_y,
+                rendered_bbox.x0, rendered_bbox.y0,
+            )
+        elif rotation == 90:
+            pixel_to_pdf = (
+                0.0, -scale_x, scale_y, 0.0,
+                rendered_bbox.y0, rendered_page_width - rendered_bbox.x0,
+            )
+        elif rotation == 180:
+            pixel_to_pdf = (
+                -scale_x, 0.0, 0.0, -scale_y,
+                rendered_page_width - rendered_bbox.x0,
+                rendered_page_height - rendered_bbox.y0,
+            )
+        elif rotation == 270:
+            pixel_to_pdf = (
+                0.0, scale_x, -scale_y, 0.0,
+                rendered_page_height - rendered_bbox.y0, rendered_bbox.x0,
+            )
+        else:
+            raise ValueError(f"Unsupported page rotation: {page_rotation}")
         transform = CoordinateTransform(
-            pixel_to_pdf=(scale_x, 0.0, 0.0, scale_y, bbox.x0, bbox.y0),
+            pixel_to_pdf=pixel_to_pdf,
             image_width_px=image_width,
             image_height_px=image_height,
-            pdf_bbox=bbox,
+            pdf_bbox=pdf_bbox,
             page_rotation=page_rotation,
         )
         target: dict[str, object] = {
             "kind": kind,
             "page_number": page_number,
             "reason": reason,
-            "bbox": [bbox.x0, bbox.y0, bbox.x1, bbox.y1],
+            "bbox": [pdf_bbox.x0, pdf_bbox.y0, pdf_bbox.x1, pdf_bbox.y1],
             "image": image_reference,
             "image_sha256": file_sha256(image_path),
             "dpi": dpi,
@@ -1368,7 +1405,14 @@ class PdfIngestPipeline:
                 for index, region in enumerate(plan.surgical_regions, start=1):
                     padding = self.routing_config.surgical_padding_points
                     dpi = self.routing_config.surgical_dpi
-                    clip = self._clip_box(page.rect, region.bbox, padding=padding)
+                    pdf_clip = self._clip_box(page.cropbox, region.bbox, padding=padding)
+                    rendered_values = pdf_bbox_to_rendered_bbox(
+                        [pdf_clip.x0, pdf_clip.y0, pdf_clip.x1, pdf_clip.y1],
+                        rendered_page_width=page.rect.width,
+                        rendered_page_height=page.rect.height,
+                        page_rotation=page.rotation,
+                    )
+                    clip = pymupdf.Rect(rendered_values)
                     path = crop_dir / (
                         f"page-{inspected_page.page_number:04d}-suspect-{index:03d}.png"
                     )
@@ -1383,7 +1427,17 @@ class PdfIngestPipeline:
                             image_path=path,
                             image_width=pixmap.width,
                             image_height=pixmap.height,
-                            bbox=BBox(x0=clip.x0, y0=clip.y0, x1=clip.x1, y1=clip.y1),
+                            rendered_bbox=BBox(
+                                x0=clip.x0, y0=clip.y0, x1=clip.x1, y1=clip.y1
+                            ),
+                            pdf_bbox=BBox(
+                                x0=pdf_clip.x0,
+                                y0=pdf_clip.y0,
+                                x1=pdf_clip.x1,
+                                y1=pdf_clip.y1,
+                            ),
+                            rendered_page_width=page.rect.width,
+                            rendered_page_height=page.rect.height,
                             dpi=dpi,
                             padding=padding,
                             page_rotation=inspected_page.rotation,
@@ -1404,7 +1458,16 @@ class PdfIngestPipeline:
                 for image_region, reason in plan.image_regions:
                     padding = self.routing_config.image_padding_points
                     dpi = self.routing_config.image_region_dpi
-                    clip = self._clip_box(page.rect, image_region.bbox, padding=padding)
+                    pdf_clip = self._clip_box(
+                        page.cropbox, image_region.bbox, padding=padding
+                    )
+                    rendered_values = pdf_bbox_to_rendered_bbox(
+                        [pdf_clip.x0, pdf_clip.y0, pdf_clip.x1, pdf_clip.y1],
+                        rendered_page_width=page.rect.width,
+                        rendered_page_height=page.rect.height,
+                        page_rotation=page.rotation,
+                    )
+                    clip = pymupdf.Rect(rendered_values)
                     path = crop_dir / (
                         f"page-{inspected_page.page_number:04d}-image-"
                         f"{image_region.image_index:03d}.png"
@@ -1420,7 +1483,17 @@ class PdfIngestPipeline:
                             image_path=path,
                             image_width=pixmap.width,
                             image_height=pixmap.height,
-                            bbox=BBox(x0=clip.x0, y0=clip.y0, x1=clip.x1, y1=clip.y1),
+                            rendered_bbox=BBox(
+                                x0=clip.x0, y0=clip.y0, x1=clip.x1, y1=clip.y1
+                            ),
+                            pdf_bbox=BBox(
+                                x0=pdf_clip.x0,
+                                y0=pdf_clip.y0,
+                                x1=pdf_clip.x1,
+                                y1=pdf_clip.y1,
+                            ),
+                            rendered_page_width=page.rect.width,
+                            rendered_page_height=page.rect.height,
                             dpi=dpi,
                             padding=padding,
                             page_rotation=inspected_page.rotation,

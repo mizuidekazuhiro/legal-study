@@ -15,11 +15,62 @@ from legal_study.models import (
     TextLayerOrigin,
     TextLayerTrust,
 )
-from legal_study.pdf.ocr.base import OcrBackendMetadata, OcrLine, OcrResult
+from legal_study.pdf.ocr.base import (
+    CoordinateTransform,
+    OcrBackendMetadata,
+    OcrLine,
+    OcrResult,
+)
 from legal_study.pdf.pipeline import PdfIngestPipeline
 from legal_study.run_manifest import prepare_run
 from legal_study.settings import LocalSettings
 from legal_study.source_store import snapshot_source
+
+
+@pytest.mark.parametrize(
+    ("rotation", "rendered_size", "pdf_size"),
+    [
+        (0, (200.0, 100.0), (200.0, 100.0)),
+        (90, (100.0, 200.0), (200.0, 100.0)),
+        (180, (200.0, 100.0), (200.0, 100.0)),
+        (270, (100.0, 200.0), (200.0, 100.0)),
+    ],
+)
+def test_target_metadata_maps_rotated_render_pixels_to_pdf_space(
+    tmp_path: Path,
+    rotation: int,
+    rendered_size: tuple[float, float],
+    pdf_size: tuple[float, float],
+) -> None:
+    image_path = tmp_path / "crop.png"
+    image_path.write_bytes(b"synthetic")
+    rendered_width, rendered_height = rendered_size
+    pdf_width, pdf_height = pdf_size
+    metadata = PdfIngestPipeline._target_metadata(
+        kind="full_page",
+        page_number=1,
+        image_reference="crop.png",
+        image_path=image_path,
+        image_width=int(rendered_width),
+        image_height=int(rendered_height),
+        rendered_bbox=BBox(
+            x0=0, y0=0, x1=rendered_width, y1=rendered_height
+        ),
+        pdf_bbox=BBox(x0=0, y0=0, x1=pdf_width, y1=pdf_height),
+        rendered_page_width=rendered_width,
+        rendered_page_height=rendered_height,
+        dpi=72,
+        padding=0,
+        page_rotation=rotation,
+        reason="test",
+    )
+    transform = CoordinateTransform.model_validate(metadata["coordinate_transform"])
+
+    mapped = transform.map_bbox(
+        BBox(x0=0, y0=0, x1=rendered_width, y1=rendered_height)
+    )
+
+    assert mapped == BBox(x0=0, y0=0, x1=pdf_width, y1=pdf_height)
 
 
 class FakeOcrEngine:

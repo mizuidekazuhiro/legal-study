@@ -90,6 +90,7 @@ review_issue_count: 1
 講師答案本文
 """,
         encoding="utf-8",
+        newline="\n",
     )
     (run_dir / "handoff_review/page-0110-review.png").write_bytes(
         b"review-sheet-110"
@@ -204,6 +205,39 @@ def test_invalid_problem_packet_stops_bundle_creation(tmp_path: Path) -> None:
             run_dir=run_dir,
             instruction_dir=instruction_dir,
         )
+
+
+def test_all_page_null_identity_normalizes_to_canonical_page_list(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "run"
+    instruction_dir = tmp_path / "instructions"
+    run_dir.mkdir()
+    _write_inputs(run_dir, instruction_dir)
+    canonical_path = run_dir / "canonical_source.json"
+    canonical = json.loads(canonical_path.read_text(encoding="utf-8"))
+    canonical["source"]["requested_pages"] = None
+    canonical_path.write_text(
+        json.dumps(canonical, ensure_ascii=False), encoding="utf-8"
+    )
+    handoff = run_dir / "criminal_22_handoff.md"
+    handoff.write_text(
+        handoff.read_text(encoding="utf-8").replace(
+            "source_pages: [110]", "source_pages: null"
+        ),
+        encoding="utf-8",
+        newline="\n",
+    )
+
+    bundle = build_study_draft_request_bundle(
+        subject="criminal",
+        question="22",
+        source=_source(),
+        run_dir=run_dir,
+        instruction_dir=instruction_dir,
+    )
+
+    assert bundle.source.requested_pages == [110]
 
 
 def test_handoff_identity_mismatch_stops_bundle_creation(tmp_path: Path) -> None:
