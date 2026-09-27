@@ -87,6 +87,9 @@ def test_bridge_availability_requires_worker_subfolders(tmp_path):
     for name in ("10_approved", "20_commands", "30_receipts", "99_failed"):
         (bridge / name).mkdir()
 
+    assert not bridge_paths_available(bridge, inbox)
+    (bridge / "00_pending").mkdir()
+
     assert bridge_paths_available(bridge, inbox)
 
 
@@ -113,7 +116,7 @@ def test_bridge_waits_for_drive_and_recovers_without_restart(tmp_path, monkeypat
 
     waiting = next(watcher)
     assert waiting.status == "WAITING_FOR_BRIDGE"
-    for name in ("10_approved", "20_commands", "30_receipts", "99_failed"):
+    for name in ("00_pending", "10_approved", "20_commands", "30_receipts", "99_failed"):
         (bridge / name).mkdir(parents=True)
     inbox.mkdir(parents=True)
 
@@ -176,7 +179,7 @@ def test_service_restarts_bridge_child_after_abnormal_exit(tmp_path):
     pdf = tmp_path / "never-read.pdf"
     pdf.write_bytes(b"invalid PDF deliberately")
     bridge = tmp_path / "bridge"
-    for name in ("10_approved", "20_commands", "30_receipts", "99_failed"):
+    for name in ("00_pending", "10_approved", "20_commands", "30_receipts", "99_failed"):
         (bridge / name).mkdir(parents=True)
     inbox = tmp_path / "inbox"
     inbox.mkdir()

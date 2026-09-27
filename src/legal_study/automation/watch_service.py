@@ -22,10 +22,12 @@ from .watch_lock import WatchLock
 
 
 def bridge_paths_available(bridge_root: Path, obsidian_inbox: Path) -> bool:
-    """Use the bridge worker's own required-path contract for readiness."""
+    """Require both producer and consumer paths before reporting readiness."""
 
     layout = BridgeLayout(root=bridge_root)
-    return not layout.missing_paths(obsidian_inbox=obsidian_inbox)
+    return (bridge_root / "00_pending").is_dir() and not layout.missing_paths(
+        obsidian_inbox=obsidian_inbox
+    )
 
 
 class ChildJob:
