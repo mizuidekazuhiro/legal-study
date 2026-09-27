@@ -74,6 +74,8 @@ def _frontmatter(
         str(pdf_pages[0])
         if pdf_pages and pdf_pages[0] == pdf_pages[-1]
         else f"{min(pdf_pages)}-{max(pdf_pages)}"
+        if pdf_pages
+        else "unknown"
     )
     values = [
         "---",
@@ -127,6 +129,8 @@ def _render_page(page: BookPage) -> list[str]:
         lines.extend(["", f"> [!{label}] {annotation.text or annotation.status.value}"])
         if annotation.linked_heading:
             lines.append(f"> linked heading: {annotation.linked_heading}")
+        if annotation.asset_name:
+            lines.append(f"> ![[assets/{annotation.asset_name}]]")
     for highlight in page.highlights:
         if highlight.kind == "highlight":
             lines.extend(
@@ -182,6 +186,16 @@ class ObsidianExporter:
                             raise FileNotFoundError(figure.source_image)
                         destination = chapter_dir / "assets" / figure.asset_name
                         status = _publish_bytes(destination, figure.source_image.read_bytes())
+                        self._record(summary, destination, status)
+                    for annotation in page.annotations:
+                        if annotation.source_image is None or annotation.asset_name is None:
+                            continue
+                        if not annotation.source_image.is_file():
+                            raise FileNotFoundError(annotation.source_image)
+                        destination = chapter_dir / "assets" / annotation.asset_name
+                        status = _publish_bytes(
+                            destination, annotation.source_image.read_bytes()
+                        )
                         self._record(summary, destination, status)
                 note = chapter_dir / f"{index:02d}_{safe_filename(section.title)}.md"
                 status = _publish_bytes(note, ("\n".join(body).rstrip() + "\n").encode("utf-8"))

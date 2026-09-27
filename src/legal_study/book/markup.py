@@ -42,6 +42,8 @@ class AnnotationEvidence(BaseModel):
     source_type: str
     status: BookTextStatus
     linked_heading: str | None = None
+    asset_name: str | None = None
+    source_image: Path | None = None
     evidence: list[str] = Field(default_factory=list)
 
 
