@@ -1,3 +1,5 @@
+import pytest
+
 from legal_study.marker_text_alignment import align_markers_to_canonical_pages
 
 
@@ -184,9 +186,6 @@ def test_zero_height_stroke_uses_its_painted_width_for_line_overlap() -> None:
     assert aligned[0]["exact_text"] == "対象"
     assert aligned[0]["position_status"] == "VERIFIED"
 
-
-
-import pytest
 
 
 @pytest.mark.parametrize(
