@@ -9,7 +9,7 @@ import pytest
 
 from legal_study.automation import watch_service
 from legal_study.automation.watch_lock import WatchLock
-from legal_study.automation.watch_service import signature
+from legal_study.automation.watch_service import bridge_paths_available, signature
 from legal_study.chat_bridge_worker import watch_bridge_commands
 from legal_study.settings import LocalSettings
 
@@ -75,6 +75,19 @@ def test_signature_uses_metadata_and_tolerates_missing(tmp_path):
     before = signature(pdf)
     pdf.write_bytes(b"updated content")
     assert signature(pdf) != before
+
+
+def test_bridge_availability_requires_worker_subfolders(tmp_path):
+    bridge = tmp_path / "bridge"
+    bridge.mkdir()
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+
+    assert not bridge_paths_available(bridge, inbox)
+    for name in ("10_approved", "20_commands", "30_receipts", "99_failed"):
+        (bridge / name).mkdir()
+
+    assert bridge_paths_available(bridge, inbox)
 
 
 def test_stale_heartbeat_is_not_alive() -> None:

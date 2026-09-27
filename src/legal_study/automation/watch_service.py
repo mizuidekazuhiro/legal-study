@@ -16,7 +16,16 @@ from ctypes import wintypes
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
+from legal_study.chat_bridge_worker import BridgeLayout
+
 from .watch_lock import WatchLock
+
+
+def bridge_paths_available(bridge_root: Path, obsidian_inbox: Path) -> bool:
+    """Use the bridge worker's own required-path contract for readiness."""
+
+    layout = BridgeLayout(root=bridge_root)
+    return not layout.missing_paths(obsidian_inbox=obsidian_inbox)
 
 
 class ChildJob:
@@ -231,7 +240,7 @@ def main():
     exit_code = 0
     try:
         log.info("service started; existing PDF is metadata baseline only; no startup OCR")
-        bridge_paths_available = None
+        last_bridge_available = None
         while not stopping.is_set():
             if stop_file.exists() and stop_file.stat().st_mtime >= launched:
                 break
@@ -251,9 +260,9 @@ def main():
                         code,
                         child_restart_seconds,
                     )
-            paths_now_available = bridge.is_dir() and inbox.is_dir()
-            if paths_now_available != bridge_paths_available:
-                bridge_paths_available = paths_now_available
+            paths_now_available = bridge_paths_available(bridge, inbox)
+            if paths_now_available != last_bridge_available:
+                last_bridge_available = paths_now_available
                 if paths_now_available:
                     log.info("Drive bridge paths available")
                 else:
