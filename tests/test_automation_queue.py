@@ -93,3 +93,31 @@ def test_queue_complete_and_fail_are_persistent(tmp_path: Path) -> None:
     assert failed.status == WorkStatus.FAILED
     assert failed.last_error == "boom"
     assert store.list_pending() == []
+
+
+def test_latest_completed_range_is_found_across_source_versions(tmp_path: Path) -> None:
+    store = AutomationStateStore(tmp_path / "state.sqlite3")
+    old = store.enqueue(
+        subject="criminal",
+        question="22",
+        source_sha256="source-a",
+        stable_page_ids=["p1", "p2"],
+        source_page_numbers=[10, 11],
+    )
+    store.claim_next()
+    store.mark_completed(old.id)
+    unrelated = store.enqueue(
+        subject="criminal",
+        question="23",
+        source_sha256="source-b",
+        stable_page_ids=["p3"],
+        source_page_numbers=[12],
+    )
+    store.claim_next()
+    store.mark_completed(unrelated.id)
+
+    latest = store.list_latest_completed_by_question("criminal")
+
+    by_question = {item.question: item for item in latest}
+    assert by_question["22"].source_sha256 == "source-a"
+    assert by_question["22"].source_page_numbers == [10, 11]

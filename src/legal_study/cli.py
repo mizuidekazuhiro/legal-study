@@ -826,7 +826,11 @@ def seed_ocr_cache(
     """Seed cross-version OCR cache from a completed historical run."""
     settings = LocalSettings()
     settings.ensure()
-    result = seed_shared_ocr_cache_from_run(run_dir, settings.cache_dir)
+    result = seed_shared_ocr_cache_from_run(
+        run_dir,
+        settings.cache_dir,
+        state_db=settings.state_db,
+    )
     console.print(json.dumps(result, ensure_ascii=False, indent=2))
 
 

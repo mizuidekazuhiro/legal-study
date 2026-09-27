@@ -385,7 +385,7 @@ def process_pdf_update(
         | set(
             revision_done_candidate_pages(
                 alignment,
-                automation_state.list_by_source(subject, previous_index.source_sha256),
+                automation_state.list_latest_completed_by_question(subject),
             )
         )
     )

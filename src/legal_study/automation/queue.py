@@ -284,6 +284,23 @@ class AutomationStateStore:
             ).fetchall()
         return [self._work_item(row) for row in rows]
 
+    def list_latest_completed_by_question(self, subject: str) -> list[WorkItem]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM automation_work_queue
+                WHERE subject = ? AND status = ?
+                ORDER BY id DESC
+                """,
+                (subject, WorkStatus.COMPLETED.value),
+            ).fetchall()
+        latest: dict[str, WorkItem] = {}
+        for row in rows:
+            item = self._work_item(row)
+            if item.source_page_numbers:
+                latest.setdefault(item.question, item)
+        return list(latest.values())
+
     def claim_next(self) -> WorkItem | None:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")

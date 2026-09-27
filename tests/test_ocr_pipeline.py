@@ -22,6 +22,7 @@ from legal_study.pdf.ocr.base import (
     OcrLine,
     OcrResult,
 )
+from legal_study.pdf.ocr.cache import seed_shared_ocr_cache_from_run
 from legal_study.pdf.pipeline import PdfIngestPipeline
 from legal_study.run_manifest import prepare_run
 from legal_study.settings import LocalSettings
@@ -635,3 +636,33 @@ def test_shared_page_cache_reexecutes_ocr_when_rendered_markup_changes(
     )
     assert moved["classification"] == "MOVED_MARKUP_CHANGED"
     assert moved["safe_for_base_ocr_reuse"] is True
+
+
+def test_seed_shared_cache_rejects_ocr_changed_after_completed_step(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.pdf"
+    _write_shared_cache_pdf(source, insert_front=False, add_markup=False)
+    settings = LocalSettings(home=tmp_path / "home")
+    snapshot = snapshot_source(source, settings=settings)
+    pipeline = PdfIngestPipeline(ocr_engine=FakeOcrEngine())
+    prepared = prepare_run(
+        snapshot=snapshot,
+        subject="criminal",
+        question="seed-integrity",
+        pages=[1],
+        pipeline_config=pipeline.input_config(),
+        settings=settings,
+    )
+    pipeline.run(snapshot, prepared, pages=[1])
+    ocr_path = prepared.output_dir / "ocr.json"
+    payload = json.loads(ocr_path.read_text(encoding="utf-8"))
+    payload["pages"]["1"]["full_page"]["result"]["text"] = "tampered"
+    ocr_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="artifact hashes"):
+        seed_shared_ocr_cache_from_run(
+            prepared.output_dir,
+            settings.cache_dir,
+            state_db=settings.state_db,
+        )

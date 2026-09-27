@@ -7,7 +7,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from legal_study.io_utils import atomic_write_json
+from legal_study.io_utils import atomic_write_json, file_sha256
 from legal_study.models import DocumentInspection
 from legal_study.page_identity import page_identity_from_inspection
 from legal_study.pdf.ocr.base import OcrBackendMetadata, OcrResult
@@ -149,6 +149,8 @@ class SharedOcrCache:
 def seed_shared_ocr_cache_from_run(
     run_dir: Path,
     cache_dir: Path,
+    *,
+    state_db: Path,
 ) -> dict[str, int]:
     run_dir = run_dir.expanduser().resolve()
     inspection_path = run_dir / "inspection.json"
@@ -164,6 +166,27 @@ def seed_shared_ocr_cache_from_run(
     manifest = RunManifest.model_validate_json(
         manifest_path.read_text(encoding="utf-8")
     )
+    from legal_study.pdf.pipeline import PdfIngestPipeline
+    from legal_study.state import RunStateStore, StepStatus
+
+    state = RunStateStore(state_db)
+    inspection_hash = PdfIngestPipeline()._inspection_bundle_hash(
+        run_dir, inspection_path, inspection
+    )
+    recorded_inspection = state.get_step(manifest.run_id, "PDF_INSPECTED")
+    recorded_ocr = state.get_step(manifest.run_id, "OCR_COMPLETE")
+    if (
+        inspection_hash is None
+        or recorded_inspection is None
+        or recorded_inspection.status != StepStatus.COMPLETED
+        or recorded_inspection.output_hash != inspection_hash
+        or recorded_ocr is None
+        or recorded_ocr.status != StepStatus.COMPLETED
+        or recorded_ocr.output_hash != file_sha256(ocr_path)
+    ):
+        raise RuntimeError(
+            "Completed run artifact hashes do not match persistent step state"
+        )
     payload = json.loads(ocr_path.read_text(encoding="utf-8"))
     backend = payload.get("backend")
     if backend is not None and not isinstance(backend, dict):
