@@ -75,3 +75,17 @@ def test_multiline_ocr_with_handwriting_is_not_auto_repaired() -> None:
 
     assert result.canonical_text is None
     assert result.status == BookTextStatus.NEEDS_REVIEW
+
+
+def test_vertical_bar_lookalike_for_same_kanji_is_not_emitted() -> None:
+    result = reconcile_text_record(
+        raw_text="条文とは必ずしも|司一ではない。235条",
+        ocr_text="条文とは必ずしも同一ではない。235条",
+        ocr_confidence=0.99,
+        pdf_page=29,
+        printed_page=19,
+        bbox=BBox(x0=60, y0=200, x1=400, y1=215),
+    )
+
+    assert result.status == BookTextStatus.NEEDS_REVIEW
+    assert result.canonical_text is None

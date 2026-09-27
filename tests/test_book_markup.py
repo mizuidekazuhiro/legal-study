@@ -1,4 +1,11 @@
-from legal_study.book.markup import WordBox, extract_rank_annotation, link_words_to_bbox
+from PIL import Image, ImageDraw
+
+from legal_study.book.markup import (
+    WordBox,
+    detect_raster_markup,
+    extract_rank_annotation,
+    link_words_to_bbox,
+)
 from legal_study.book.text_verification import BookTextStatus
 from legal_study.models import BBox
 
@@ -46,3 +53,24 @@ def test_uncertain_rank_is_not_guessed() -> None:
     assert rank.text is None
     assert rank.status == BookTextStatus.NEEDS_REVIEW
 
+
+def test_thin_colored_writing_is_annotation_not_highlight(tmp_path) -> None:
+    image = Image.new("RGB", (600, 840), "white")
+    ImageDraw.Draw(image).line((100, 110, 140, 110), fill=(40, 70, 180), width=1)
+    path = tmp_path / "page.png"
+    image.save(path)
+
+    marks = detect_raster_markup(
+        path,
+        page_width=600,
+        page_height=840,
+        words=[
+            WordBox(
+                text="書込み",
+                bbox=BBox(x0=100, y0=100, x1=150, y1=120),
+                order=0,
+            )
+        ],
+    )
+
+    assert any(item.kind == "annotation" and item.linked_text == "書込み" for item in marks)

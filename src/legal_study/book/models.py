@@ -65,4 +65,3 @@ class BookPage(BaseModel):
     figures: list[BookFigure] = Field(default_factory=list)
     annotations: list[AnnotationEvidence] = Field(default_factory=list)
     highlights: list[MarkupEvidence] = Field(default_factory=list)
-

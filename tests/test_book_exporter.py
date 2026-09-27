@@ -123,4 +123,3 @@ def test_export_never_overwrites_different_existing_vault_note(tmp_path: Path) -
         exporter.export(_manifest(), [_page(asset)])
 
     assert note.read_text(encoding="utf-8") == "user-owned content"
-

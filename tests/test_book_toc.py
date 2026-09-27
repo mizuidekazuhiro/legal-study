@@ -39,4 +39,3 @@ def test_printed_page_mapping_supports_offset_changes() -> None:
     assert mapping.pdf_page_for_printed(15) == 20
     assert len(mapping.segments) == 2
     assert [segment.offset for segment in mapping.segments] == [9, 5]
-

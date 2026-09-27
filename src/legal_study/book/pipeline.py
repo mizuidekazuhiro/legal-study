@@ -57,13 +57,14 @@ from legal_study.settings import LocalSettings
 from legal_study.source_store import SourceSnapshot, verify_snapshot
 from legal_study.state import RunStateStore
 
-_PIPELINE_VERSION = "3"
-_STRUCTURE_VERSION = "1"
+_PIPELINE_VERSION = "7"
+_STRUCTURE_VERSION = "3"
 _INSPECTION_VERSION = "1"
-_PAGES_VERSION = "1"
-_CHAPTER_RE = re.compile(r"第\s*(\d+)\s*章\s*([^\r\n〈<く]+)")
+_PAGES_VERSION = "4"
+_CHAPTER_RE = re.compile(
+    r"第\s*((?:[0-9０-９]\s*){1,3})章\s*([^\r\n〈<く]+)"
+)
 _SECTION_HEADER_RE = re.compile(r"[〈<く]\s*([^〉>）\r\n]+)\s*[〉>）]")
-_PRINTED_PAGE_RE = re.compile(r"(?:刑\s*[-－]\s*)?(\d{1,4})\s*$")
 _RANK_RE = re.compile(r"\b[ABC]\s*\+?\s*Rank\b", re.IGNORECASE)
 _RANK_CANDIDATE_RE = re.compile(r"\b[ABC](?:\+|t|†)?\s*Rank\b", re.IGNORECASE)
 
@@ -133,9 +134,20 @@ def _normalized(value: str) -> str:
     return re.sub(r"\s+", "", unicodedata.normalize("NFKC", value))
 
 
+def _digits(value: str) -> int:
+    return int(re.sub(r"\s+", "", unicodedata.normalize("NFKC", value)))
+
+
 def _line_bbox(line: dict[str, Any]) -> BBox:
     values = line["bbox"]
     return BBox(x0=values[0], y0=values[1], x1=values[2], y1=values[3])
+
+
+def _bbox_intersection_ratio(inner: BBox, outer: BBox) -> float:
+    width = max(0.0, min(inner.x1, outer.x1) - max(inner.x0, outer.x0))
+    height = max(0.0, min(inner.y1, outer.y1) - max(inner.y0, outer.y0))
+    area = max((inner.x1 - inner.x0) * (inner.y1 - inner.y0), 1e-9)
+    return width * height / area
 
 
 def _native_lines(page: pymupdf.Page) -> list[tuple[str, BBox]]:
@@ -149,39 +161,35 @@ def _native_lines(page: pymupdf.Page) -> list[tuple[str, BBox]]:
     return output
 
 
-def _printed_page_from_lines(
-    lines: list[tuple[str, BBox]], *, width: float, height: float
-) -> int | None:
-    candidates: list[tuple[float, int]] = []
-    for text, bbox in lines:
-        outer_edge = bbox.x1 <= width * 0.10 or bbox.x0 >= width * 0.90
-        if bbox.y0 < height * 0.93 or not outer_edge:
-            continue
-        match = _PRINTED_PAGE_RE.search(str(text).replace(" ", ""))
-        if match:
-            candidates.append((bbox.y1, int(match.group(1))))
-    if candidates:
-        return max(candidates)[1]
+def _printed_page_from_text(text: str) -> int | None:
+    for line in reversed(text.splitlines()[-20:]):
+        normalized = unicodedata.normalize("NFKC", line).strip()
+        if re.fullmatch(r"\d{1,4}", normalized):
+            return int(normalized)
     return None
 
 
-def _header_fields(
-    lines: list[tuple[str, BBox]], *, height: float
-) -> tuple[int | None, str | None, str | None]:
-    chapter: int | None = None
-    chapter_title: str | None = None
-    section_title: str | None = None
-    for text, bbox in lines:
-        if bbox.y0 > height * 0.12:
-            break
-        chapter_match = _CHAPTER_RE.search(text)
-        if chapter_match and bbox.y0 <= height * 0.11:
-            chapter = int(chapter_match.group(1))
-            chapter_title = re.sub(r"\s{2,}.*$", "", chapter_match.group(2)).strip()
-        section_match = _SECTION_HEADER_RE.search(text)
-        if section_match:
-            section_title = section_match.group(1).strip()
-    return chapter, chapter_title, section_title
+def _printed_page_from_page(page: pymupdf.Page) -> int | None:
+    width = page.rect.width
+    height = page.rect.height
+    footer = pymupdf.Rect(0, height * 0.90, width, height)
+    candidates: list[tuple[float, float, int]] = []
+    for word in page.get_text("words", clip=footer, sort=True):
+        normalized = unicodedata.normalize("NFKC", str(word[4])).strip()
+        if not re.fullmatch(r"\d{1,4}", normalized):
+            continue
+        if word[1] < height * 0.92:
+            continue
+        if word[2] <= width * 0.25:
+            edge_distance = word[0]
+        elif word[0] >= width * 0.75:
+            edge_distance = width - word[2]
+        else:
+            continue
+        candidates.append((-float(word[1]), edge_distance, int(normalized)))
+    if candidates:
+        return min(candidates)[2]
+    return _printed_page_from_text(page.get_text("text", clip=footer, sort=True))
 
 
 def _header_fields_text(text: str) -> tuple[int | None, str | None, str | None]:
@@ -191,7 +199,7 @@ def _header_fields_text(text: str) -> tuple[int | None, str | None, str | None]:
     title = None
     chapter = None
     if chapter_match:
-        chapter = int(chapter_match.group(1))
+        chapter = _digits(chapter_match.group(1))
         title = re.sub(r"\s{2,}.*$", "", chapter_match.group(2)).strip()
     return (
         chapter,
@@ -426,20 +434,11 @@ class BookPipeline:
                 scanned.append(
                     StructurePage(
                         pdf_page=pdf_page,
-                        printed_page=None,
+                        printed_page=_printed_page_from_page(page),
                         chapter=chapter,
                         chapter_title=title,
                         section_title=section_title,
                     )
-                )
-
-            for run in heading_runs:
-                page_number = int(run["start"])
-                page = document[page_number - 1]
-                scanned[page_number - 1].printed_page = _printed_page_from_lines(
-                    _native_lines(page),
-                    width=page.rect.width,
-                    height=page.rect.height,
                 )
 
             toc_chapters = parse_toc_text("\n".join(toc_texts))
@@ -452,7 +451,7 @@ class BookPipeline:
                 toc_chapters = list(deduplicated_geometry.values())
             chapter_by_number = {item.chapter: item for item in toc_chapters}
             selected_numbers = (
-                sorted(chapter_by_number)
+                sorted({int(run["chapter"]) for run in heading_runs})
                 if self.config.chapters is None
                 else sorted(set(self.config.chapters))
             )
@@ -468,6 +467,10 @@ class BookPipeline:
                         or _normalized(str(run["title"])) in _normalized(chapter.title)
                     )
                 ]
+                if not candidates:
+                    candidates = [
+                        run for run in heading_runs if int(run["chapter"]) == number
+                    ]
                 if chapter is not None:
                     exact = [
                         run
@@ -506,23 +509,19 @@ class BookPipeline:
                 chapter.pdf_start_page = int(run["start"])
                 chapter.pdf_end_page = int(run["end"])
 
-            selected_ranges = [
-                (chapter.pdf_start_page, chapter.pdf_end_page)
-                for chapter in chapter_by_number.values()
-                if chapter.chapter in selected_numbers
-                and chapter.pdf_start_page is not None
-                and chapter.pdf_end_page is not None
-            ]
-            for start, end in selected_ranges:
-                assert start is not None and end is not None
-                for page_number in range(start, end + 1):
-                    page = document[page_number - 1]
-                    lines = _native_lines(page)
-                    scanned[page_number - 1].printed_page = _printed_page_from_lines(
-                        lines,
-                        width=page.rect.width,
-                        height=page.rect.height,
-                    )
+            resolved_chapters = sorted(
+                (
+                    chapter_by_number[number]
+                    for number in selected_numbers
+                    if number in chapter_by_number
+                    and chapter_by_number[number].pdf_start_page is not None
+                ),
+                key=lambda item: item.pdf_start_page or 0,
+            )
+            for index, chapter in enumerate(resolved_chapters[:-1]):
+                next_start = resolved_chapters[index + 1].pdf_start_page
+                assert next_start is not None
+                chapter.pdf_end_page = next_start - 1
 
             anchors = [
                 PrintedPageAnchor(pdf_page=item.pdf_page, printed_page=item.printed_page)
@@ -878,6 +877,7 @@ class BookPipeline:
                 page_width=inspected.width,
                 page_height=inspected.height,
                 body_bbox=zones.boxes["main_body"],
+                word_boxes=[(word.text, word.bbox) for word in words],
             )
             for index, bbox in enumerate(regions, start=1):
                 asset_name = (
@@ -912,6 +912,13 @@ class BookPipeline:
 
         annotations: list[AnnotationEvidence] = []
         text_records = []
+        linked_annotation_markup = [
+            item
+            for item in markup
+            if item.kind == "annotation"
+            and item.linked_text
+            and not _RANK_RE.search(item.linked_text)
+        ]
         crop_dir = prepared.output_dir / "book_ocr_crops"
         for line_index, (raw_text, bbox) in enumerate(_native_lines(page), start=1):
             if _RANK_CANDIDATE_RE.search(raw_text):
@@ -970,6 +977,19 @@ class BookPipeline:
             page_zones = zones_for_bbox(zones, bbox)
             if "main_body" not in page_zones or "binding" in page_zones:
                 continue
+            heading_band_bottom = 0.0
+            if chapter.pdf_start_page == pdf_page:
+                heading_band_bottom = inspected.height * 0.17
+            elif section.pdf_page == pdf_page:
+                heading_band_bottom = inspected.height * 0.105
+            if bbox.y1 <= heading_band_bottom:
+                continue
+            if any(
+                raw_text in (item.linked_text or "")
+                and _bbox_intersection_ratio(bbox, item.bbox) >= 0.10
+                for item in linked_annotation_markup
+            ):
+                continue
             ocr_result: OcrResult | None = None
             evidence_id: str | None = None
             if should_route_surgical_ocr(raw_text, bbox, zones):
@@ -1009,6 +1029,36 @@ class BookPipeline:
             )
 
         annotation_index = 0
+        linked_annotation_groups: dict[tuple[str, str], list[MarkupEvidence]] = {}
+        for item in markup:
+            if item.kind != "annotation" or not item.linked_text:
+                continue
+            if _RANK_RE.search(item.linked_text):
+                continue
+            linked_annotation_groups.setdefault(
+                (item.linked_text, item.color_family), []
+            ).append(item)
+        for (linked_text, color_family), items in linked_annotation_groups.items():
+            annotation_index += 1
+            annotations.append(
+                AnnotationEvidence(
+                    id=f"p{pdf_page:04d}-ann-{annotation_index:03d}",
+                    text=linked_text,
+                    raw_text=linked_text,
+                    page=pdf_page,
+                    bbox=BBox(
+                        x0=min(item.bbox.x0 for item in items),
+                        y0=min(item.bbox.y0 for item in items),
+                        x1=max(item.bbox.x1 for item in items),
+                        y1=max(item.bbox.y1 for item in items),
+                    ),
+                    color=color_family,
+                    raw_rgb=items[0].raw_rgb,
+                    source_type="pdf_text_object_plus_raster_palette",
+                    status=BookTextStatus.NATIVE_VERIFIED,
+                    evidence=["colored_text_kept_out_of_printed_body"],
+                )
+            )
         for item in markup:
             if item.kind != "annotation" or item.linked_text:
                 continue

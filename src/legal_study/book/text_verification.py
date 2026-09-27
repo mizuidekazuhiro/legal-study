@@ -34,7 +34,9 @@ class BookTextRecord(BaseModel):
     evidence: list[str] = Field(default_factory=list)
 
 
-_BROKEN_GLYPH_RE = re.compile(r"(?:半[|｜丨][｣」]|[|｜丨][｣」]|[|｜丨]{2,})")
+_BROKEN_GLYPH_RE = re.compile(
+    r"(?:半[|｜丨][｣」]|[|｜丨][｣」]|[|｜丨]司|[|｜丨]{2,})"
+)
 _PROTECTED_RE = re.compile(
     r"[0-9０-９]|第\s*[一二三四五六七八九十百千]+(?:条|項|号)|"
     r"(?:昭和|平成|令和|最判|大判|百選|事件)|[年月日条項号]"

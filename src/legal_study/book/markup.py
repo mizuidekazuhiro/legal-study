@@ -183,16 +183,6 @@ def detect_raster_markup(
                 x1=x1 / size[0] * page_width,
                 y1=y1 / size[1] * page_height,
             )
-            linked = link_words_to_bbox(words, bbox)
-            is_rank = bool(linked and _RANK_RE.search(linked))
-            kind = (
-                "highlight"
-                if linked
-                and not is_rank
-                and bbox.y1 - bbox.y0 <= page_height * 0.065
-                and bbox.x1 - bbox.x0 >= (bbox.y1 - bbox.y0) * 1.25
-                else "annotation"
-            )
             samples = [
                 pixels[y * size[0] + x]
                 for y in range(y0, y1)
@@ -201,6 +191,18 @@ def detect_raster_markup(
             ]
             if not samples:
                 continue
+            linked = link_words_to_bbox(words, bbox)
+            is_rank = bool(linked and _RANK_RE.search(linked))
+            fill_ratio = len(samples) / max((x1 - x0) * (y1 - y0), 1)
+            kind = (
+                "highlight"
+                if linked
+                and not is_rank
+                and fill_ratio >= 0.25
+                and bbox.y1 - bbox.y0 <= page_height * 0.065
+                and bbox.x1 - bbox.x0 >= (bbox.y1 - bbox.y0) * 1.25
+                else "annotation"
+            )
             raw_rgb = tuple(
                 sum(sample[channel] for sample in samples) / (255.0 * len(samples))
                 for channel in range(3)

@@ -31,4 +31,3 @@ def test_binding_side_can_switch_on_facing_page() -> None:
 
     assert zones.binding_side == "right"
     assert "binding" in zones_for_bbox(zones, spans[0].bbox)
-

@@ -132,6 +132,16 @@ def _render_page(page: BookPage) -> list[str]:
         if annotation.asset_name:
             lines.append(f"> ![[assets/{annotation.asset_name}]]")
     for highlight in page.highlights:
+        if any(
+            not (
+                highlight.bbox.x1 <= figure.bbox.x0
+                or figure.bbox.x1 <= highlight.bbox.x0
+                or highlight.bbox.y1 <= figure.bbox.y0
+                or figure.bbox.y1 <= highlight.bbox.y0
+            )
+            for figure in page.figures
+        ):
+            continue
         if highlight.kind == "highlight":
             lines.extend(
                 [

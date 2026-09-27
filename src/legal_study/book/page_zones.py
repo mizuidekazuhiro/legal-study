@@ -162,4 +162,3 @@ def zones_for_bbox(zones: PageZones, bbox: BBox) -> set[str]:
     elif _contains_point(zones.boxes["right_margin"], x, y):
         matches.update({"right_margin", "annotation_memo"})
     return matches
-

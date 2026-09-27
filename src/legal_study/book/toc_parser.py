@@ -119,4 +119,3 @@ def build_printed_page_map(anchors: list[PrintedPageAnchor]) -> PrintedPageMap:
         ],
         segments=segments,
     )
-

@@ -4,7 +4,11 @@ from pathlib import Path
 
 import pymupdf
 
-from legal_study.book.pipeline import BookPipeline, BookPipelineConfig
+from legal_study.book.pipeline import (
+    BookPipeline,
+    BookPipelineConfig,
+    _header_fields_text,
+)
 from legal_study.book.text_verification import BookTextStatus
 from legal_study.pdf.ocr.base import OcrBackendMetadata, OcrLine, OcrResult
 from legal_study.settings import LocalSettings
@@ -55,7 +59,12 @@ def _book_pdf(path: Path, *, extra: str = "") -> None:
     printed = [None, 19, 25]
     for index, (text, printed_page) in enumerate(zip(texts, printed, strict=True)):
         page = document.new_page(width=513, height=730)
-        page.insert_text((60, 70), text, fontname="japan", fontsize=10)
+        page.insert_text(
+            (60, 150 if index == 1 else 70),
+            text,
+            fontname="japan",
+            fontsize=10,
+        )
         if printed_page is not None:
             page.insert_text(
                 (478 if index % 2 else 27, 705),
@@ -100,6 +109,7 @@ def test_pipeline_discovers_chapter_repairs_surgically_and_resumes(tmp_path: Pat
     )
 
     assert first.selected_pdf_pages == [2]
+    assert first.pages[0].printed_page == 19
     assert first.ocr_executed == 2
     assert engine.calls == 2
     assert second.processed == 0
@@ -149,3 +159,7 @@ def test_source_change_cannot_reuse_surgical_ocr_target(tmp_path: Path) -> None:
     )
 
     assert engine.calls == 4
+
+
+def test_spaced_chapter_number_is_recognized() -> None:
+    assert _header_fields_text("第1 5章 共犯\n本文") == (15, "共犯", None)
