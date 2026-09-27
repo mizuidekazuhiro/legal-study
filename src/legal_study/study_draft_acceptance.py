@@ -10,6 +10,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from legal_study.study_draft import StudyDraft
+from legal_study.study_draft_request import required_instruction_names
 from legal_study.study_draft_validation import validate_study_draft_evidence
 
 
@@ -89,6 +90,7 @@ def accept_study_draft_response(
         )
 
     issues.extend(_review_gate_issues(draft))
+    issues.extend(_instruction_source_issues(draft))
 
     if draft.subject == "criminal" and not draft.anki_cards:
         issues.append(
@@ -191,6 +193,30 @@ def _review_gate_issues(draft: StudyDraft) -> list[StudyDraftAcceptanceIssue]:
             )
 
     return issues
+
+
+def _instruction_source_issues(
+    draft: StudyDraft,
+) -> list[StudyDraftAcceptanceIssue]:
+    expected = required_instruction_names(draft.subject)
+    actual = [item.name for item in draft.instruction_sources]
+    if actual != expected:
+        return [
+            StudyDraftAcceptanceIssue(
+                code="INSTRUCTION_SOURCES_MISMATCH",
+                message=f"Expected governing instructions {expected!r}, got {actual!r}",
+                location="instruction_sources",
+            )
+        ]
+    return [
+        StudyDraftAcceptanceIssue(
+            code="INSTRUCTION_SOURCE_HASH_MISSING",
+            message=f"Governing instruction {item.name!r} has no verified SHA-256",
+            location=f"instruction_sources[{index}].sha256",
+        )
+        for index, item in enumerate(draft.instruction_sources)
+        if item.sha256 is None
+    ]
 
 
 def _iter_draft_texts(draft: StudyDraft):

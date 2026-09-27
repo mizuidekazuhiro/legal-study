@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from legal_study.study_draft_acceptance import accept_study_draft_response
+from legal_study.study_draft_request import required_instruction_names
 
 
 def _write_run(run_dir: Path) -> None:
@@ -120,10 +121,8 @@ def _payload() -> dict[str, object]:
             "problem_validation_path": "problem_validation.json",
         },
         "instruction_sources": [
-            {
-                "name": "00_論文作成・登録_本番_プロジェクト指示.md",
-                "sha256": None,
-            }
+            {"name": name, "sha256": "f" * 64}
+            for name in required_instruction_names("criminal")
         ],
         "visual_reviews": [
             {
@@ -237,6 +236,26 @@ def test_response_source_identity_must_match_run_artifacts(
     assert result.accepted is False
     matching = [issue for issue in result.issues if issue.location == f"source.{field}"]
     assert [issue.code for issue in matching] == ["SOURCE_RUN_IDENTITY_MISMATCH"]
+
+
+def test_response_requires_exact_hashed_governing_instruction_set(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_run(run_dir)
+    payload = _payload()
+    payload["instruction_sources"] = [{"name": "invented.md", "sha256": None}]
+
+    result = accept_study_draft_response(
+        raw_response_text=_raw(payload),
+        run_dir=run_dir,
+    )
+
+    assert result.accepted is False
+    assert "INSTRUCTION_SOURCES_MISMATCH" in {
+        issue.code for issue in result.issues
+    }
 
 
 def test_response_must_cover_each_canonical_review_sheet_once(tmp_path: Path) -> None:

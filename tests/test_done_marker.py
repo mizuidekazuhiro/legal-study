@@ -52,6 +52,25 @@ def test_detects_done_stamp_as_embedded_image(tmp_path: Path) -> None:
     assert result.stamp_version == STAMP_VERSION
 
 
+def test_embedded_done_stamp_outside_completion_region_is_not_detected(
+    tmp_path: Path,
+) -> None:
+    pdf = tmp_path / "misplaced.pdf"
+    document = pymupdf.open()
+    page = document.new_page(width=400, height=550)
+    page.insert_text((40, 80), "question content")
+    page.insert_image(
+        pymupdf.Rect(20, 20, 140, 64),
+        stream=done_stamp_png_bytes(),
+    )
+    document.save(pdf)
+    document.close()
+
+    result = detect_done_markers(pdf, pages=[1])[0]
+
+    assert result.detected is False
+
+
 def test_detects_done_stamp_after_page_is_flattened(tmp_path: Path) -> None:
     page_image = Image.new("RGB", (800, 1100), "white")
     draw = ImageDraw.Draw(page_image)

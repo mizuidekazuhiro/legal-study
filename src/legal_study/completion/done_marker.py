@@ -168,6 +168,17 @@ def _embedded_image_detection(document: pymupdf.Document, page: pymupdf.Page) ->
         score = _similarity(image, build_done_stamp_image())
         best = max(best, score)
         if score >= 0.88:
+            try:
+                displayed = page.get_image_rects(xref)
+            except (RuntimeError, ValueError):
+                displayed = []
+            in_completion_region = any(
+                rect.x1 > page.rect.width * 0.50
+                and rect.y1 > page.rect.height * 0.55
+                for rect in displayed
+            )
+            if not in_completion_region:
+                continue
             return DoneDetection(
                 page_number=page.number + 1,
                 detected=True,
