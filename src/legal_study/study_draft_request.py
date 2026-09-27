@@ -36,9 +36,14 @@ class BundleLogicalMarker(StrictBundleModel):
     id: str = Field(min_length=1)
     page_number: int = Field(ge=1)
     color: str = Field(min_length=1)
-    exact_text: str = Field(min_length=1)
+    exact_text: str | None = Field(default=None, min_length=1)
     start_char: int = Field(ge=0)
     end_char: int = Field(ge=0)
+    canonical_start_char: int | None = Field(default=None, ge=0)
+    canonical_end_char_exclusive: int | None = Field(default=None, ge=0)
+    character_range_semantics: str | None = None
+    position_status: str | None = None
+    text_accuracy_status: str | None = None
     boundary_confidence: float | None = None
     review_status: str = Field(min_length=1)
     reason: str | None = None
@@ -268,7 +273,14 @@ def _read_logical_markers(
             raise ValueError("Logical marker id must be a non-empty string")
         if not isinstance(color, str) or not color.strip():
             raise ValueError(f"Logical marker {marker_id} color is missing")
-        if not isinstance(exact_text, str) or not exact_text:
+        unresolved_v4 = (
+            canonical.get("schema_version") == 4
+            and exact_text is None
+            and review_status == "NEEDS_REVIEW"
+            and item.get("canonical_start_char") is None
+            and item.get("canonical_end_char_exclusive") is None
+        )
+        if not unresolved_v4 and (not isinstance(exact_text, str) or not exact_text):
             raise ValueError(f"Logical marker {marker_id} exact_text is missing")
         if not isinstance(start_char, int) or not isinstance(end_char, int):
             raise TypeError(f"Logical marker {marker_id} char bounds must be integers")
@@ -302,6 +314,13 @@ def _read_logical_markers(
                 exact_text=exact_text,
                 start_char=start_char,
                 end_char=end_char,
+                canonical_start_char=item.get("canonical_start_char"),
+                canonical_end_char_exclusive=item.get(
+                    "canonical_end_char_exclusive"
+                ),
+                character_range_semantics=item.get("character_range_semantics"),
+                position_status=item.get("position_status"),
+                text_accuracy_status=item.get("text_accuracy_status"),
                 boundary_confidence=(
                     float(boundary_confidence)
                     if boundary_confidence is not None

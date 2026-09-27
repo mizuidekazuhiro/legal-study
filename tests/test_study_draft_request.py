@@ -6,6 +6,7 @@ import pytest
 
 from legal_study.study_draft import DraftSource
 from legal_study.study_draft_request import (
+    _read_logical_markers,
     build_study_draft_request_bundle,
     required_instruction_names,
 )
@@ -306,3 +307,38 @@ def test_logical_marker_may_omit_evidence_image(tmp_path: Path) -> None:
 
     assert len(bundle.logical_markers) == 1
     assert bundle.logical_markers[0].evidence_image is None
+
+
+def test_v4_unresolved_marker_is_preserved_for_visual_review(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    instruction_dir = tmp_path / "instructions"
+    run_dir.mkdir()
+    _write_inputs(run_dir, instruction_dir)
+
+    canonical_path = run_dir / "canonical_source.json"
+    canonical = json.loads(canonical_path.read_text(encoding="utf-8"))
+    canonical["schema_version"] = 4
+    marker = canonical["logical_markers"][0]
+    marker.update(
+        {
+            "exact_text": None,
+            "canonical_start_char": None,
+            "canonical_end_char_exclusive": None,
+            "character_range_semantics": "page_unicode_codepoints_end_exclusive",
+            "position_status": "NEEDS_REVIEW",
+            "text_accuracy_status": "NEEDS_REVIEW",
+        }
+    )
+    canonical_path.write_text(
+        json.dumps(canonical, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    unresolved = _read_logical_markers(
+        canonical=canonical,
+        requested_pages=[110],
+    )[0]
+    assert unresolved.exact_text is None
+    assert unresolved.canonical_start_char is None
+    assert unresolved.canonical_end_char_exclusive is None
+    assert unresolved.review_status == "NEEDS_REVIEW"
