@@ -369,7 +369,16 @@ def process_bridge_command(
             question=command.question,
             source_sha256=command.source_sha256,
         )
-        validation = validate_chat_result(result_path=result_path, run_dir=run_dir)
+        validation_scope = (
+            "obsidian"
+            if command.action == BridgeAction.APPLY_OBSIDIAN
+            else "full"
+        )
+        validation = validate_chat_result(
+            result_path=result_path,
+            run_dir=run_dir,
+            validation_scope=validation_scope,
+        )
         if not validation.valid:
             raise RuntimeError(
                 "Chat result validation failed: " + ", ".join(validation.issues)
@@ -387,6 +396,7 @@ def process_bridge_command(
                 run_dir=run_dir,
                 obsidian_inbox=obsidian_inbox,
                 update_existing=True,
+                validation_scope=validation_scope,
             )
             obsidian_status = apply_report.inbox_status
             obsidian_path = apply_report.inbox_path

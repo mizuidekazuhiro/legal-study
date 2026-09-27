@@ -10,6 +10,9 @@ from legal_study.io_utils import atomic_write_json, atomic_write_text, file_sha2
 from legal_study.run_manifest import RunManifest
 
 
+ValidationScope = Literal["full", "obsidian"]
+
+
 class StrictChatResultModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -98,6 +101,7 @@ def validate_chat_result(
     *,
     result_path: Path,
     run_dir: Path,
+    validation_scope: ValidationScope = "full",
 ) -> ChatResultValidationReport:
     result_file = result_path.expanduser().resolve()
     root = run_dir.expanduser().resolve()
@@ -161,7 +165,7 @@ def validate_chat_result(
     ):
         issues.append("PROBLEM_CARD_EXTRA_MISSING")
 
-    if manifest.subject == "criminal":
+    if manifest.subject == "criminal" and validation_scope == "full":
         if not any(
             card.scope == "problem"
             and card.learning_type == "B"
@@ -218,6 +222,7 @@ def apply_chat_result(
     run_dir: Path,
     obsidian_inbox: Path | None = None,
     update_existing: bool = False,
+    validation_scope: ValidationScope = "full",
 ) -> ChatApplyReport:
     """Materialize a validated Chat result locally without touching Notion.
 
@@ -227,7 +232,11 @@ def apply_chat_result(
     """
 
     root = run_dir.expanduser().resolve()
-    report = validate_chat_result(result_path=result_path, run_dir=root)
+    report = validate_chat_result(
+        result_path=result_path,
+        run_dir=root,
+        validation_scope=validation_scope,
+    )
     if not report.valid:
         raise RuntimeError(
             "Chat result validation failed: " + ", ".join(report.issues)
