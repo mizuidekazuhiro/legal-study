@@ -83,6 +83,9 @@ class VectorMark(BaseModel):
     kind: str
     color_name: str | None = None
     color_rgb: tuple[float, float, float] | None = None
+    raw_rgb: tuple[float, float, float] | None = None
+    color_family: str | None = None
+    palette_cluster_id: str | None = None
     rect: BBox
     width: float | None = None
     opacity: float | None = None

@@ -10,6 +10,15 @@ artifacts/
 renders/
 ocr_crops/
 review_crops/
+book_renders/
+book_ocr_crops/
+book_assets/
+book_page_checkpoints/
+book_structure.json
+book_inspection.json
+book_pages.json
+book_summary.json
+book_manifest.json
 orphans/
 sources/sha256/
 cache/

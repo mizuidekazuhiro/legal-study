@@ -14,6 +14,7 @@ from legal_study.automation.file_watcher import iter_file_updates
 from legal_study.automation.orchestrator import watch_pdf_updates
 from legal_study.automation.sync_stability import mark_question_sync_stable
 from legal_study.automation.worker import drain_pending_work, process_next_work_item
+from legal_study.book.pipeline import BookPipeline, BookPipelineConfig
 from legal_study.chat_bridge_publish import publish_run_to_bridge
 from legal_study.chat_bridge_worker import watch_bridge_commands
 from legal_study.chat_packet import build_chat_packet
@@ -832,6 +833,140 @@ def seed_ocr_cache(
         state_db=settings.state_db,
     )
     console.print(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+def _book_ocr_engine(value: str, settings: LocalSettings):
+    if value == "none":
+        return None
+    if value == "paddle":
+        return PaddleOcrEngine(model_root=settings.models_dir / "paddleocr")
+    raise typer.BadParameter("ocr must be 'none' or 'paddle'")
+
+
+def _book_result_summary(result) -> dict[str, object]:
+    return {
+        "run_id": result.run_id,
+        "run_dir": str(result.run_dir),
+        "output_dir": str(result.output_dir),
+        "source_sha256": result.source_sha256,
+        "selected_pdf_pages": result.selected_pdf_pages,
+        "processed": result.processed,
+        "reused": result.reused,
+        "cache_hit": result.cache_hit,
+        "ocr_executed": result.ocr_executed,
+        "needs_review": result.needs_review,
+        "failed": result.failed,
+        "elapsed_seconds": result.elapsed_seconds,
+        "files_written": result.export.written,
+        "files_reused": result.export.reused,
+    }
+
+
+@app.command("export-book")
+def export_book(
+    pdf: Annotated[Path, typer.Argument(exists=True, readable=True, dir_okay=False)],
+    output_dir: Annotated[
+        Path, typer.Option("--output", "-o", help="Obsidian Vault output directory.")
+    ],
+    chapters: Annotated[
+        str | None, typer.Option(help="Chapter numbers, e.g. 5 or 5,6.")
+    ] = None,
+    ocr: Annotated[str, typer.Option(help="none|paddle")] = "none",
+    subject: Annotated[str, typer.Option()] = "刑法",
+    book: Annotated[str | None, typer.Option()] = None,
+    preserve_markup: Annotated[
+        bool, typer.Option("--preserve-markup/--no-preserve-markup")
+    ] = True,
+    verbatim: Annotated[bool, typer.Option("--verbatim/--no-verbatim")] = True,
+    resume: Annotated[bool, typer.Option("--resume/--no-resume")] = True,
+) -> None:
+    """Export one textbook PDF as a chapter/section-oriented Obsidian corpus."""
+    del resume  # Safe checkpoints and idempotence are always enabled.
+    if not verbatim:
+        raise typer.BadParameter("Book Mode requires verbatim source preservation")
+    parsed_chapters = _parse_pages(chapters)
+    settings = LocalSettings()
+    settings.ensure()
+    snapshot = snapshot_source(pdf, settings=settings)
+    pipeline = BookPipeline(
+        config=BookPipelineConfig(
+            chapters=parsed_chapters,
+            preserve_markup=preserve_markup,
+            verbatim=verbatim,
+        ),
+        ocr_engine=_book_ocr_engine(ocr, settings),
+    )
+    result = pipeline.run(
+        snapshot,
+        output_dir=output_dir,
+        settings=settings,
+        subject=subject,
+        book=book or pdf.stem.replace("_", " "),
+    )
+    console.print(json.dumps(_book_result_summary(result), ensure_ascii=False, indent=2))
+
+
+@app.command("export-books")
+def export_books(
+    directory: Annotated[
+        Path, typer.Argument(exists=True, readable=True, file_okay=False)
+    ],
+    output_dir: Annotated[
+        Path, typer.Option("--output", "-o", help="Obsidian Vault output directory.")
+    ],
+    chapters: Annotated[
+        str | None, typer.Option(help="Optional chapter numbers for every book.")
+    ] = None,
+    ocr: Annotated[str, typer.Option(help="none|paddle")] = "none",
+    subject: Annotated[str, typer.Option()] = "刑法",
+    preserve_markup: Annotated[
+        bool, typer.Option("--preserve-markup/--no-preserve-markup")
+    ] = True,
+    verbatim: Annotated[bool, typer.Option("--verbatim/--no-verbatim")] = True,
+    resume: Annotated[bool, typer.Option("--resume/--no-resume")] = True,
+) -> None:
+    """Export every PDF in a directory with independent hashes and checkpoints."""
+    del resume
+    if not verbatim:
+        raise typer.BadParameter("Book Mode requires verbatim source preservation")
+    parsed_chapters = _parse_pages(chapters)
+    settings = LocalSettings()
+    settings.ensure()
+    engine = _book_ocr_engine(ocr, settings)
+    summaries: list[dict[str, object]] = []
+    failures: list[dict[str, str]] = []
+    pdfs = sorted(directory.glob("*.pdf"))
+    if not pdfs:
+        raise typer.BadParameter(f"No PDF files found in {directory}")
+    for pdf in pdfs:
+        try:
+            pipeline = BookPipeline(
+                config=BookPipelineConfig(
+                    chapters=parsed_chapters,
+                    preserve_markup=preserve_markup,
+                    verbatim=verbatim,
+                ),
+                ocr_engine=engine,
+            )
+            result = pipeline.run(
+                snapshot_source(pdf, settings=settings),
+                output_dir=output_dir,
+                settings=settings,
+                subject=subject,
+                book=pdf.stem.replace("_", " "),
+            )
+            summaries.append(_book_result_summary(result))
+        except Exception as exc:  # noqa: BLE001 - isolate failures between books
+            failures.append({"source": str(pdf), "error": str(exc)})
+    console.print(
+        json.dumps(
+            {"processed_books": summaries, "failed_books": failures},
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    if failures:
+        raise typer.Exit(code=1)
 
 
 @app.command()

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import colorsys
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from math import sqrt
@@ -22,7 +23,16 @@ KNOWN_COLORS = (
     KnownColor("orange", (1.0, 0.7254902, 0.3294118)),
     KnownColor("red", (1.0, 0.1647059, 0.1333181)),
     KnownColor("purple", (0.75, 0.5, 0.95)),
+    KnownColor("green", (0.35, 0.90, 0.42)),
 )
+
+
+@dataclass(frozen=True)
+class PaletteCluster:
+    id: str
+    representative_rgb: tuple[float, float, float]
+    color_family: str
+    member_count: int
 
 
 def _distance(a: tuple[float, float, float], b: tuple[float, float, float]) -> float:
@@ -33,7 +43,67 @@ def nearest_color(rgb: tuple[float, float, float] | None, tolerance: float = 0.1
     if rgb is None:
         return None
     candidate = min(KNOWN_COLORS, key=lambda c: _distance(rgb, c.rgb))
-    return candidate.name if _distance(rgb, candidate.rgb) <= tolerance else None
+    return candidate.name if _distance(rgb, candidate.rgb) <= tolerance else classify_color_family(rgb)
+
+
+def classify_color_family(rgb: tuple[float, float, float] | None) -> str | None:
+    """Classify saturated page colors without assigning semantic meaning."""
+    if rgb is None or len(rgb) != 3:
+        return None
+    red, green, blue = (max(0.0, min(1.0, float(value))) for value in rgb)
+    hue, saturation, value = colorsys.rgb_to_hsv(red, green, blue)
+    if saturation < 0.20 or value < 0.40:
+        return None
+    if hue < 0.04 or hue >= 0.96:
+        return "red"
+    if hue < 0.105:
+        return "orange"
+    if hue < 0.20:
+        return "yellow"
+    if hue < 0.48:
+        return "green"
+    if hue < 0.58:
+        return "cyan"
+    if hue < 0.72:
+        return "blue"
+    if hue < 0.90:
+        return "purple"
+    return "pink"
+
+
+def cluster_page_palette(
+    colors: Iterable[tuple[float, float, float]], *, tolerance: float = 0.22
+) -> list[PaletteCluster]:
+    groups: list[list[tuple[float, float, float]]] = []
+    families: list[str] = []
+    for rgb in colors:
+        family = classify_color_family(rgb)
+        if family is None:
+            continue
+        selected = None
+        for index, group in enumerate(groups):
+            representative = tuple(
+                sum(item[channel] for item in group) / len(group) for channel in range(3)
+            )
+            if families[index] == family and _distance(rgb, representative) <= tolerance:
+                selected = index
+                break
+        if selected is None:
+            groups.append([rgb])
+            families.append(family)
+        else:
+            groups[selected].append(rgb)
+    return [
+        PaletteCluster(
+            id=f"palette-{index:03d}",
+            representative_rgb=tuple(
+                sum(item[channel] for item in group) / len(group) for channel in range(3)
+            ),
+            color_family=families[index - 1],
+            member_count=len(group),
+        )
+        for index, group in enumerate(groups, start=1)
+    ]
 
 
 def _bbox(rect: pymupdf.Rect) -> BBox:
@@ -115,6 +185,8 @@ def extract_vector_marks(
                         kind="red_vector_evidence",
                         color_name=name,
                         color_rgb=rgb,
+                        raw_rgb=rgb,
+                        color_family=name,
                         rect=_bbox(rect),
                         width=width,
                         opacity=_opacity(opacity_value),
@@ -125,7 +197,7 @@ def extract_vector_marks(
 
             marker_stroke = paint == "stroke" and width is not None and width >= 3.0
             marker_fill = paint == "fill"
-            if name in {"yellow", "blue", "orange", "purple"} and (
+            if name in {"yellow", "green", "cyan", "blue", "orange", "purple", "pink"} and (
                 marker_stroke or marker_fill
             ):
                 text = _extract_words(page, rect, width or 0.0)
@@ -136,6 +208,8 @@ def extract_vector_marks(
                         kind="marker_candidate",
                         color_name=name,
                         color_rgb=rgb,
+                        raw_rgb=rgb,
+                        color_family=name,
                         rect=_bbox(rect),
                         width=width,
                         opacity=_opacity(opacity_value),
