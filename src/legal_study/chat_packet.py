@@ -80,11 +80,23 @@ def build_chat_packet(
     ]
     if len(canonical_page_numbers) != len(set(canonical_page_numbers)):
         raise RuntimeError("canonical pages contain duplicate page_number values")
-    effective_requested_pages = (
-        list(manifest.requested_pages)
-        if manifest.requested_pages is not None
-        else canonical_page_numbers
-    )
+    if manifest.requested_pages is not None:
+        effective_requested_pages = list(manifest.requested_pages)
+    else:
+        if manifest.page_count is None or manifest.page_count < 1:
+            raise RuntimeError(
+                "all-pages Chat packet requires a positive manifest page_count"
+            )
+        effective_requested_pages = list(range(1, manifest.page_count + 1))
+
+    if (
+        len(canonical_page_numbers) != len(effective_requested_pages)
+        or set(canonical_page_numbers) != set(effective_requested_pages)
+    ):
+        raise RuntimeError(
+            "canonical pages do not match the effective requested page set"
+        )
+
     page_text_index = [
         {
             "page_number": int(page["page_number"]),

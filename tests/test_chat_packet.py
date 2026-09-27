@@ -474,3 +474,57 @@ def test_all_pages_run_materializes_effective_requested_pages(tmp_path: Path) ->
         packet_manifest = json.loads(archive.read("packet_manifest.json"))
         assert packet_manifest["requested_pages"] == [1]
         assert "review/page-0001-review.png" in archive.namelist()
+
+
+
+def test_all_pages_run_rejects_incomplete_canonical_page_set(tmp_path: Path) -> None:
+    run = _run(tmp_path)
+    manifest_path = run / "run_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["requested_pages"] = None
+    manifest["page_count"] = 2
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+
+    canonical_path = run / "canonical_source.json"
+    canonical = json.loads(canonical_path.read_text(encoding="utf-8"))
+    text = "1ページ目だけ"
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    canonical["schema_version"] = 4
+    canonical["source"]["requested_pages"] = None
+    canonical["pages"] = [
+        {
+            "page_number": 1,
+            "canonical_text": text,
+            "canonical_text_sha256": digest,
+            "canonical_text_source": "reconciled_text",
+        }
+    ]
+    canonical["logical_markers"] = []
+    canonical_path.write_text(json.dumps(canonical, ensure_ascii=False), encoding="utf-8")
+
+    with pytest.raises(
+        RuntimeError, match="canonical pages do not match the effective requested page set"
+    ):
+        build_chat_packet(run_dir=run)
+
+
+def test_all_pages_run_requires_manifest_page_count(tmp_path: Path) -> None:
+    run = _run(tmp_path)
+    manifest_path = run / "run_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["requested_pages"] = None
+    manifest["page_count"] = None
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+
+    canonical_path = run / "canonical_source.json"
+    canonical = json.loads(canonical_path.read_text(encoding="utf-8"))
+    canonical["schema_version"] = 4
+    canonical["source"]["requested_pages"] = None
+    canonical["pages"] = []
+    canonical["logical_markers"] = []
+    canonical_path.write_text(json.dumps(canonical, ensure_ascii=False), encoding="utf-8")
+
+    with pytest.raises(
+        RuntimeError, match="all-pages Chat packet requires a positive manifest page_count"
+    ):
+        build_chat_packet(run_dir=run)
