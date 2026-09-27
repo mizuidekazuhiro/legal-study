@@ -158,16 +158,10 @@ def _align_marker(
     )
     selected: tuple[int, int] | None = None
 
-    old_start = aligned.get("start_char")
-    old_end = aligned.get("end_char")
-    if (
-        usable_exact is not None
-        and isinstance(old_start, int)
-        and isinstance(old_end, int)
-        and canonical_text[old_start : old_end + 1] == usable_exact
-    ):
-        selected = (old_start, old_end + 1)
-    elif usable_exact is not None:
+    # Legacy start_char/end_char are indexes into PdfInspector._native_chars.
+    # They exclude synthetic separators inserted by page.get_text("text"), so
+    # they are raw evidence only and must never be reused as canonical offsets.
+    if usable_exact is not None:
         selected = _unique_range(canonical_text, usable_exact)
 
     marker_bbox = _paint_bbox(aligned)

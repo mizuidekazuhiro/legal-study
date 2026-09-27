@@ -225,3 +225,28 @@ def test_suspicious_reconciled_marker_text_stays_review_required(
     assert marker["text_accuracy_status"] == "NEEDS_REVIEW"
     assert marker["review_status"] == "NEEDS_REVIEW"
     assert marker["reason"] == "canonical_text_contains_suspicious_glyph_or_token"
+
+
+
+def test_repeated_native_text_does_not_reuse_raw_character_offsets() -> None:
+    pages = [
+        {
+            "page_number": 1,
+            "text_layer_trust": "high",
+            "reconciled_text": "対象。別文。対象。",
+        }
+    ]
+    marker = _marker(text="対象", bbox=[10, 10, 50, 20], status="AUTO_VERIFIED")
+    marker["start_char"] = 6
+    marker["end_char"] = 7
+
+    aligned = align_markers_to_canonical_pages(pages, [marker], {"pages": {}})
+
+    result = aligned[0]
+    assert result["start_char"] == 6
+    assert result["end_char"] == 7
+    assert result["canonical_start_char"] is None
+    assert result["canonical_end_char_exclusive"] is None
+    assert result["exact_text"] is None
+    assert result["position_status"] == "NEEDS_REVIEW"
+    assert result["review_status"] == "NEEDS_REVIEW"

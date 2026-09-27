@@ -73,6 +73,18 @@ def build_chat_packet(
 
     marker_index = [_compact_marker(item) for item in (canonical.get("logical_markers") or [])]
     marker_schema_v2 = int(canonical.get("schema_version", 0)) >= 4
+    canonical_page_numbers = [
+        int(page["page_number"])
+        for page in (canonical.get("pages") or [])
+        if isinstance(page, dict) and page.get("page_number") is not None
+    ]
+    if len(canonical_page_numbers) != len(set(canonical_page_numbers)):
+        raise RuntimeError("canonical pages contain duplicate page_number values")
+    effective_requested_pages = (
+        list(manifest.requested_pages)
+        if manifest.requested_pages is not None
+        else canonical_page_numbers
+    )
     page_text_index = [
         {
             "page_number": int(page["page_number"]),
@@ -89,7 +101,7 @@ def build_chat_packet(
     ]
 
     review_files: list[tuple[int, Path]] = []
-    for page_number in manifest.requested_pages or []:
+    for page_number in effective_requested_pages:
         path = root / "handoff_review" / f"page-{page_number:04d}-review.png"
         if not path.is_file():
             raise FileNotFoundError(f"Review sheet is missing: {path}")
@@ -121,7 +133,7 @@ def build_chat_packet(
         "question": manifest.question,
         "source_sha256": manifest.source.sha256,
         "run_id": manifest.run_id,
-        "requested_pages": manifest.requested_pages,
+        "requested_pages": effective_requested_pages,
         "handoff_file": "handoff.md",
         "logical_marker_count": len(marker_index),
         "marker_index_schema_version": (
@@ -199,7 +211,7 @@ def build_chat_packet(
         subject=manifest.subject,
         question=manifest.question,
         source_sha256=manifest.source.sha256,
-        requested_pages=list(manifest.requested_pages or []),
+        requested_pages=effective_requested_pages,
         logical_marker_count=len(marker_index),
         review_sheet_count=len(review_files),
         supplemental_included=supplemental_payload is not None,

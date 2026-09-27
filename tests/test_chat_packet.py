@@ -429,3 +429,48 @@ def test_v2_packet_rejects_marker_count_or_type_mismatch(
 
     with pytest.raises(RuntimeError, match="structural validation failed"):
         validate_chat_packet_structure(tampered)
+
+
+
+def test_all_pages_run_materializes_effective_requested_pages(tmp_path: Path) -> None:
+    run = _run(tmp_path)
+    manifest_path = run / "run_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["requested_pages"] = None
+    manifest["page_count"] = 1
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+
+    canonical_path = run / "canonical_source.json"
+    canonical = json.loads(canonical_path.read_text(encoding="utf-8"))
+    text = "全ページ本文"
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    canonical["schema_version"] = 4
+    canonical["source"]["requested_pages"] = None
+    canonical["pages"] = [
+        {
+            "page_number": 1,
+            "canonical_text": text,
+            "canonical_text_sha256": digest,
+            "canonical_text_source": "reconciled_text",
+        }
+    ]
+    canonical["logical_markers"] = []
+    canonical_path.write_text(json.dumps(canonical, ensure_ascii=False), encoding="utf-8")
+
+    (run / "handoff_review/page-0109-review.png").unlink()
+    (run / "handoff_review/page-0001-review.png").write_bytes(b"png")
+    (run / "criminal_12_handoff.md").write_text(
+        "# Page Reading Pack\n\n## PDF page 1\n\n"
+        "第12問\n12-1\n次の事例について甲の罪責を論ぜよ。\n"
+        "答案例\n講師答案本文\n以上\n",
+        encoding="utf-8",
+    )
+
+    result = build_chat_packet(run_dir=run)
+
+    assert result.requested_pages == [1]
+    assert validate_chat_packet_structure(Path(result.packet_path))["valid"] is True
+    with zipfile.ZipFile(result.packet_path) as archive:
+        packet_manifest = json.loads(archive.read("packet_manifest.json"))
+        assert packet_manifest["requested_pages"] == [1]
+        assert "review/page-0001-review.png" in archive.namelist()

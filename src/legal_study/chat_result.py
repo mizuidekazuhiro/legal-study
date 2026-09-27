@@ -117,10 +117,16 @@ def validate_chat_result(
         issues.append("SOURCE_QUESTION_MISMATCH")
     if result.source.source_sha256 != manifest.source.sha256:
         issues.append("SOURCE_SHA256_MISMATCH")
-    if result.source.requested_pages != manifest.requested_pages:
+    if manifest.requested_pages is not None:
+        requested = list(manifest.requested_pages)
+    elif manifest.page_count is not None:
+        requested = list(range(1, manifest.page_count + 1))
+    else:
+        requested = []
+        issues.append("SOURCE_PAGES_UNRESOLVED")
+    if result.source.requested_pages != requested:
         issues.append("SOURCE_PAGES_MISMATCH")
 
-    requested = list(manifest.requested_pages or [])
     if sorted(set(result.reviewed_pages)) != sorted(set(requested)):
         issues.append("VISUAL_REVIEW_INCOMPLETE")
     if result.unresolved:

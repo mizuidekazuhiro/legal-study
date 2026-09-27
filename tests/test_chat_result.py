@@ -204,3 +204,27 @@ def test_apply_chat_result_refuses_differing_existing_note_by_default(
         assert "differing Obsidian file already exists" in str(exc)
     else:
         raise AssertionError("Expected differing existing note to be refused")
+
+
+
+def test_all_pages_run_uses_page_count_as_effective_requested_pages(tmp_path: Path) -> None:
+    run = _run(tmp_path)
+    manifest_path = run / "run_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["requested_pages"] = None
+    manifest["page_count"] = 2
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+
+    payload = _payload()
+    payload["source"]["requested_pages"] = [1, 2]
+    payload["reviewed_pages"] = [1, 2]
+    result_file = tmp_path / "study_result.json"
+    result_file.write_text(
+        json.dumps(payload, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    report = validate_chat_result(result_path=result_file, run_dir=run)
+
+    assert report.valid is True
+    assert report.issues == []
