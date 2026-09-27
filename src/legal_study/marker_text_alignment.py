@@ -140,6 +140,7 @@ def _align_marker(
     page_number = int(page["page_number"])
     text_hash = str(page["canonical_text_sha256"])
     old_exact = aligned.get("exact_text")
+    boundary_was_verified = aligned.get("review_status") == "AUTO_VERIFIED"
     usable_exact = (
         str(old_exact)
         if isinstance(old_exact, str) and old_exact and not _contains_bad_control_text(old_exact)
@@ -192,8 +193,12 @@ def _align_marker(
         ):
             aligned["position_status"] = "VERIFIED"
             aligned["text_accuracy_status"] = "VERIFIED"
-            aligned["review_status"] = "AUTO_VERIFIED"
-            aligned["reason"] = "trusted_canonical_text_and_native_character_geometry_agree"
+            if boundary_was_verified:
+                aligned["review_status"] = "AUTO_VERIFIED"
+                aligned["reason"] = "trusted_canonical_text_and_verified_marker_boundary_agree"
+            else:
+                aligned["review_status"] = "NEEDS_REVIEW"
+                aligned["reason"] = "canonical_text_aligned_but_marker_boundary_requires_review"
         else:
             aligned["position_status"] = "VERIFIED"
             aligned["text_accuracy_status"] = "NEEDS_REVIEW"

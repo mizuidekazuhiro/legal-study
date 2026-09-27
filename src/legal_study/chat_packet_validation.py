@@ -107,44 +107,66 @@ def validate_chat_packet_structure(packet: Path) -> dict[str, Any]:
             expected_reviews = {f"review/page-{page:04d}-review.png" for page in requested}
             handoff = archive.read("handoff.md").decode("utf-8")
             marker_payload = json.loads(archive.read("marker_index.json"))
-            marker_schema_v2 = marker_payload.get("schema_version") == "marker_index.v2"
+            packet_schema = manifest.get("schema_version")
+            supported_packet_schema = packet_schema in {"chat_packet.v1", "chat_packet.v2"}
+            marker_schema_v2 = packet_schema == "chat_packet.v2"
+            declared_marker_schema = manifest.get("marker_index_schema_version")
+            payload_marker_schema = marker_payload.get("schema_version")
+            if marker_schema_v2:
+                marker_schema_consistent = (
+                    declared_marker_schema == "marker_index.v2"
+                    and payload_marker_schema == "marker_index.v2"
+                )
+            else:
+                marker_schema_consistent = (
+                    declared_marker_schema in {None, "marker_index.v1"}
+                    and payload_marker_schema in {None, "marker_index.v1"}
+                )
+
+            page_text_present = "page_text.json" in names
             page_text_payload = (
-                json.loads(archive.read("page_text.json")) if marker_schema_v2 else {"pages": []}
+                json.loads(archive.read("page_text.json"))
+                if marker_schema_v2 and page_text_present
+                else {"pages": []}
+            )
+            page_text_schema_valid = (
+                not marker_schema_v2
+                or page_text_payload.get("schema_version") == "page_text.v1"
             )
             page_texts = {
                 int(page["page_number"]): page
                 for page in page_text_payload.get("pages", [])
                 if isinstance(page, dict) and page.get("page_number") is not None
             }
-            marker_refs_valid = True
-            for marker in marker_payload.get("logical_markers", []):
-                page = page_texts.get(int(marker["page_number"]))
-                reference = marker.get("text_reference")
-                if page is None or not isinstance(reference, dict):
-                    # v1 markers remain readable but are not upgraded to verified v2 evidence.
-                    marker_refs_valid = (
-                        marker_refs_valid
-                        and marker_payload.get("schema_version") != "marker_index.v2"
+            marker_refs_valid = (
+                not marker_schema_v2
+                or (marker_schema_consistent and page_text_present and page_text_schema_valid)
+            )
+            if marker_schema_v2:
+                for marker in marker_payload.get("logical_markers", []):
+                    page = page_texts.get(int(marker["page_number"]))
+                    reference = marker.get("text_reference")
+                    if page is None or not isinstance(reference, dict):
+                        marker_refs_valid = False
+                        continue
+                    text = str(page.get("text") or "")
+                    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+                    start = marker.get("canonical_start_char")
+                    end = marker.get("canonical_end_char_exclusive")
+                    range_valid = start is None and end is None and marker.get("exact_text") is None
+                    if isinstance(start, int) and isinstance(end, int):
+                        range_valid = 0 <= start <= end <= len(text) and text[start:end] == marker.get(
+                            "exact_text"
+                        )
+                    marker_refs_valid = marker_refs_valid and (
+                        digest == page.get("text_sha256") == reference.get("text_sha256")
+                        and int(reference.get("page_number", -1)) == int(marker["page_number"])
+                        and range_valid
+                        and (
+                            marker.get("review_status") == "AUTO_VERIFIED"
+                            or marker.get("evidence_image") in names
+                        )
                     )
-                    continue
-                text = str(page.get("text") or "")
-                digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
-                start = marker.get("canonical_start_char")
-                end = marker.get("canonical_end_char_exclusive")
-                range_valid = start is None and end is None and marker.get("exact_text") is None
-                if isinstance(start, int) and isinstance(end, int):
-                    range_valid = 0 <= start <= end <= len(text) and text[start:end] == marker.get(
-                        "exact_text"
-                    )
-                marker_refs_valid = marker_refs_valid and (
-                    digest == page.get("text_sha256") == reference.get("text_sha256")
-                    and int(reference.get("page_number", -1)) == int(marker["page_number"])
-                    and range_valid
-                    and (
-                        marker.get("review_status") == "AUTO_VERIFIED"
-                        or marker.get("evidence_image") in names
-                    )
-                )
             checks = {
                 "paths_safe": safe,
                 "paths_unique": unique,
@@ -155,7 +177,10 @@ def validate_chat_packet_structure(packet: Path) -> dict[str, Any]:
                     "marker_index.json",
                     "CHAT_INSTRUCTIONS.md",
                 }.issubset(names),
-                "page_text_present_for_v2": not marker_schema_v2 or "page_text.json" in names,
+                "packet_schema_supported": supported_packet_schema,
+                "marker_schema_matches_manifest": marker_schema_consistent,
+                "page_text_present_for_v2": not marker_schema_v2 or page_text_present,
+                "page_text_schema_valid_for_v2": page_text_schema_valid,
                 "review_pages_match_manifest": expected_reviews
                 == {name for name in names if name.startswith("review/")},
                 "handoff_pages_match_manifest": all(

@@ -80,7 +80,7 @@ def test_valid_native_marker_uses_exclusive_canonical_range() -> None:
             "reconciled_text": "前文（重要）後文",
         }
     ]
-    markers = [_marker(text="（重要）", bbox=[10, 10, 50, 20])]
+    markers = [_marker(text="（重要）", bbox=[10, 10, 50, 20], status="AUTO_VERIFIED")]
 
     aligned = align_markers_to_canonical_pages(pages, markers, {"pages": {}})
 
@@ -90,6 +90,28 @@ def test_valid_native_marker_uses_exclusive_canonical_range() -> None:
     assert pages[0]["canonical_text"][start:end] == marker["exact_text"] == "（重要）"
     assert marker["character_range_semantics"] == "page_unicode_codepoints_end_exclusive"
     assert marker["review_status"] == "AUTO_VERIFIED"
+
+
+def test_trusted_text_alignment_does_not_promote_unverified_marker_boundary() -> None:
+    pages = [
+        {
+            "page_number": 1,
+            "text_layer_trust": "high",
+            "reconciled_text": "前文（重要）後文",
+        }
+    ]
+    markers = [_marker(text="（重要）", bbox=[10, 10, 50, 20], status="NEEDS_REVIEW")]
+
+    aligned = align_markers_to_canonical_pages(pages, markers, {"pages": {}})
+
+    marker = aligned[0]
+    start = marker["canonical_start_char"]
+    end = marker["canonical_end_char_exclusive"]
+    assert pages[0]["canonical_text"][start:end] == marker["exact_text"] == "（重要）"
+    assert marker["position_status"] == "VERIFIED"
+    assert marker["text_accuracy_status"] == "VERIFIED"
+    assert marker["review_status"] == "NEEDS_REVIEW"
+    assert marker["reason"] == "canonical_text_aligned_but_marker_boundary_requires_review"
 
 
 def test_repeated_text_without_geometric_character_boundary_stays_review() -> None:

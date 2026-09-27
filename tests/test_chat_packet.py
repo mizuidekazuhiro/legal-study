@@ -244,8 +244,7 @@ def test_packet_without_supplemental_keeps_primary_evidence(tmp_path: Path) -> N
         }
 
 
-def test_v2_packet_keeps_verified_page_text_marker_range_and_evidence(tmp_path: Path) -> None:
-    run = _run(tmp_path)
+def _upgrade_run_to_v2(run: Path) -> tuple[str, str]:
     canonical_path = run / "canonical_source.json"
     canonical = json.loads(canonical_path.read_text(encoding="utf-8"))
     text = "前文（重要事実）後文"
@@ -276,6 +275,12 @@ def test_v2_packet_keeps_verified_page_text_marker_range_and_evidence(tmp_path: 
         }
     )
     canonical_path.write_text(json.dumps(canonical, ensure_ascii=False), encoding="utf-8")
+    return text, digest
+
+
+def test_v2_packet_keeps_verified_page_text_marker_range_and_evidence(tmp_path: Path) -> None:
+    run = _run(tmp_path)
+    text, digest = _upgrade_run_to_v2(run)
 
     result = build_chat_packet(run_dir=run)
 
@@ -296,3 +301,32 @@ def test_v2_packet_keeps_verified_page_text_marker_range_and_evidence(tmp_path: 
             ]
             == exported["exact_text"]
         )
+
+
+
+@pytest.mark.parametrize("downgraded_schema", [None, "marker_index.v1"])
+def test_v2_packet_rejects_marker_schema_downgrade(
+    tmp_path: Path, downgraded_schema: str | None
+) -> None:
+    run = _run(tmp_path)
+    _upgrade_run_to_v2(run)
+    result = build_chat_packet(run_dir=run)
+    packet = Path(result.packet_path)
+    tampered = tmp_path / f"tampered-{downgraded_schema or 'missing'}.zip"
+
+    with zipfile.ZipFile(packet) as source, zipfile.ZipFile(
+        tampered, "w", compression=zipfile.ZIP_DEFLATED
+    ) as target:
+        for name in source.namelist():
+            payload = source.read(name)
+            if name == "marker_index.json":
+                marker_payload = json.loads(payload)
+                if downgraded_schema is None:
+                    marker_payload.pop("schema_version", None)
+                else:
+                    marker_payload["schema_version"] = downgraded_schema
+                payload = json.dumps(marker_payload, ensure_ascii=False).encode("utf-8")
+            target.writestr(name, payload)
+
+    with pytest.raises(RuntimeError, match="structural validation failed"):
+        validate_chat_packet_structure(tampered)
