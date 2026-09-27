@@ -1154,6 +1154,12 @@ def validate_problem_packet(
         for item in canonical["needs_review"]
         if item.get("handoff_evidence_image") or item.get("evidence_image")
     ]
+    review_sheet_refs = [
+        str(reference)
+        for reference in (canonical.get("handoff_review_sheets") or {}).values()
+        if reference
+    ]
+    evidence_refs.extend(review_sheet_refs)
     evidence_ok = True
     for reference in evidence_refs:
         try:

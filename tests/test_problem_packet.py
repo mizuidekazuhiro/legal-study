@@ -69,7 +69,45 @@ def test_clean_page_still_gets_full_page_review_sheet(tmp_path: Path) -> None:
     } or canonical["handoff_review_sheets"] == {
         1: "handoff_review/page-0001-review.png"
     }
-    assert (prepared.output_dir / "handoff_review/page-0001-review.png").is_file()
+    review_sheet = prepared.output_dir / "handoff_review/page-0001-review.png"
+    assert review_sheet.is_file()
+
+    validation = json.loads(
+        (prepared.output_dir / "problem_validation.json").read_text(encoding="utf-8")
+    )
+    assert validation["upload_files"] == [
+        "criminal_plain_handoff.md",
+        "handoff_review/page-0001-review.png",
+    ]
+
+
+def test_clean_page_review_sheet_is_part_of_resume_bundle(tmp_path: Path) -> None:
+    source = tmp_path / "plain-resume.pdf"
+    _plain_pdf(source)
+    settings = LocalSettings(home=tmp_path / "home")
+    snapshot = snapshot_source(source, settings=settings)
+    pipeline = PdfIngestPipeline()
+    prepared = prepare_run(
+        snapshot=snapshot,
+        subject="criminal",
+        question="plain-resume",
+        pages=[1],
+        pipeline_config=pipeline.input_config(),
+        settings=settings,
+    )
+
+    pipeline.run(snapshot, prepared, pages=[1])
+    review_sheet = prepared.output_dir / "handoff_review/page-0001-review.png"
+    assert review_sheet.is_file()
+    original = review_sheet.read_bytes()
+
+    review_sheet.unlink()
+    assert not review_sheet.exists()
+
+    pipeline.run(snapshot, prepared, pages=[1])
+
+    assert review_sheet.is_file()
+    assert review_sheet.read_bytes() == original
 
 
 def test_pipeline_writes_valid_problem_packet_with_relative_evidence(tmp_path: Path) -> None:
