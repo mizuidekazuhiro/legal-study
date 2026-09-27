@@ -9,6 +9,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from legal_study.io_utils import atomic_write_json, atomic_write_text, file_sha256
 from legal_study.run_manifest import RunManifest
 
+ValidationScope = Literal["full", "obsidian"]
+
 
 class StrictChatResultModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -98,6 +100,7 @@ def validate_chat_result(
     *,
     result_path: Path,
     run_dir: Path,
+    validation_scope: ValidationScope = "full",
 ) -> ChatResultValidationReport:
     result_file = result_path.expanduser().resolve()
     root = run_dir.expanduser().resolve()
@@ -143,40 +146,41 @@ def validate_chat_result(
         "administrative": "行政法 論文試験",
     }.get(manifest.subject)
 
-    for index, card in enumerate(result.anki_cards):
-        if expected_subject and card.subject != expected_subject:
-            issues.append(f"ANKI_SUBJECT_MISMATCH:{index}")
-        if expected_deck and card.anki_deck != expected_deck:
-            issues.append(f"ANKI_DECK_MISMATCH:{index}")
-        for field_name, value in (
-            ("front", card.front),
-            ("back", card.back),
-        ):
-            if "<br>" not in value:
-                issues.append(f"ANKI_HTML_BREAK_MISSING:{index}:{field_name}")
-        if card.scope == "common_rule" and (
-            not card.extra or "<br>" not in card.extra
-        ):
-            issues.append(f"ANKI_COMMON_EXTRA_INVALID:{index}")
-
     problem_cards = [card for card in result.anki_cards if card.scope == "problem"]
     common_cards = [card for card in result.anki_cards if card.scope == "common_rule"]
 
-    if problem_cards and (
-        not result.problem_card_extra or "<br>" not in result.problem_card_extra
-    ):
-        issues.append("PROBLEM_CARD_EXTRA_MISSING")
+    if validation_scope == "full":
+        for index, card in enumerate(result.anki_cards):
+            if expected_subject and card.subject != expected_subject:
+                issues.append(f"ANKI_SUBJECT_MISMATCH:{index}")
+            if expected_deck and card.anki_deck != expected_deck:
+                issues.append(f"ANKI_DECK_MISMATCH:{index}")
+            for field_name, value in (
+                ("front", card.front),
+                ("back", card.back),
+            ):
+                if "<br>" not in value:
+                    issues.append(f"ANKI_HTML_BREAK_MISSING:{index}:{field_name}")
+            if card.scope == "common_rule" and (
+                not card.extra or "<br>" not in card.extra
+            ):
+                issues.append(f"ANKI_COMMON_EXTRA_INVALID:{index}")
 
-    if manifest.subject == "criminal":
-        if not any(
-            card.scope == "problem"
-            and card.learning_type == "B"
-            and card.level == "L4"
-            for card in result.anki_cards
+        if problem_cards and (
+            not result.problem_card_extra or "<br>" not in result.problem_card_extra
         ):
-            issues.append("CRIMINAL_L4_B_CARD_MISSING")
-        if not problem_cards:
-            issues.append("CRIMINAL_PROBLEM_CARDS_MISSING")
+            issues.append("PROBLEM_CARD_EXTRA_MISSING")
+
+        if manifest.subject == "criminal":
+            if not any(
+                card.scope == "problem"
+                and card.learning_type == "B"
+                and card.level == "L4"
+                for card in result.anki_cards
+            ):
+                issues.append("CRIMINAL_L4_B_CARD_MISSING")
+            if not problem_cards:
+                issues.append("CRIMINAL_PROBLEM_CARDS_MISSING")
 
     if not result.obsidian_note.markdown.strip():
         issues.append("OBSIDIAN_MARKDOWN_EMPTY")
@@ -224,6 +228,7 @@ def apply_chat_result(
     run_dir: Path,
     obsidian_inbox: Path | None = None,
     update_existing: bool = False,
+    validation_scope: ValidationScope = "full",
 ) -> ChatApplyReport:
     """Materialize a validated Chat result locally without touching Notion.
 
@@ -233,7 +238,11 @@ def apply_chat_result(
     """
 
     root = run_dir.expanduser().resolve()
-    report = validate_chat_result(result_path=result_path, run_dir=root)
+    report = validate_chat_result(
+        result_path=result_path,
+        run_dir=root,
+        validation_scope=validation_scope,
+    )
     if not report.valid:
         raise RuntimeError(
             "Chat result validation failed: " + ", ".join(report.issues)

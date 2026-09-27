@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from legal_study.chat_result import (
     ChatStudyResult,
     apply_chat_result,
@@ -117,6 +119,89 @@ def test_valid_chat_result_binds_to_exact_run(tmp_path: Path) -> None:
     assert report.card_count == 2
     assert report.problem_card_count == 1
     assert report.common_rule_card_count == 1
+
+
+def test_obsidian_only_validation_accepts_no_cards_but_full_validation_does_not(
+    tmp_path: Path,
+) -> None:
+    run = _run(tmp_path)
+    payload = _payload()
+    payload["anki_cards"] = []
+    payload.pop("problem_card_extra")
+    result_file = tmp_path / "study_result.json"
+    result_file.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    full = validate_chat_result(result_path=result_file, run_dir=run)
+    obsidian = validate_chat_result(
+        result_path=result_file,
+        run_dir=run,
+        validation_scope="obsidian",
+    )
+
+    assert full.valid is False
+    assert "CRIMINAL_L4_B_CARD_MISSING" in full.issues
+    assert "CRIMINAL_PROBLEM_CARDS_MISSING" in full.issues
+    assert obsidian.valid is True
+    assert obsidian.card_count == 0
+
+
+def test_obsidian_only_validation_ignores_anki_policy_fields(tmp_path: Path) -> None:
+    run = _run(tmp_path)
+    payload = _payload()
+    payload["problem_card_extra"] = None
+    payload["anki_cards"][0].update(
+        {
+            "subject": "wrong subject",
+            "anki_deck": "wrong deck",
+            "front": "no html break",
+            "back": "no html break",
+        }
+    )
+    payload["anki_cards"][1]["extra"] = "no html break"
+    result_file = tmp_path / "study_result.json"
+    result_file.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    full = validate_chat_result(result_path=result_file, run_dir=run)
+    obsidian = validate_chat_result(
+        result_path=result_file,
+        run_dir=run,
+        validation_scope="obsidian",
+    )
+
+    assert full.valid is False
+    assert "ANKI_SUBJECT_MISMATCH:0" in full.issues
+    assert "ANKI_DECK_MISMATCH:0" in full.issues
+    assert "ANKI_HTML_BREAK_MISSING:0:front" in full.issues
+    assert "ANKI_COMMON_EXTRA_INVALID:1" in full.issues
+    assert "PROBLEM_CARD_EXTRA_MISSING" in full.issues
+    assert obsidian.valid is True
+    assert obsidian.issues == []
+
+
+def test_criminal_card_roles_and_l4_b_requirement_are_counted_independently(
+    tmp_path: Path,
+) -> None:
+    run = _run(tmp_path)
+    payload = _payload()
+    payload["anki_cards"][0]["learning_type"] = "A"
+    result_file = tmp_path / "study_result.json"
+    result_file.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    report = validate_chat_result(result_path=result_file, run_dir=run)
+
+    assert report.problem_card_count == 1
+    assert report.common_rule_card_count == 1
+    assert "CRIMINAL_L4_B_CARD_MISSING" in report.issues
+    assert "CRIMINAL_PROBLEM_CARDS_MISSING" not in report.issues
+
+
+def test_malformed_chat_result_json_is_rejected(tmp_path: Path) -> None:
+    run = _run(tmp_path)
+    result_file = tmp_path / "study_result.json"
+    result_file.write_text('{"schema_version":', encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        validate_chat_result(result_path=result_file, run_dir=run)
 
 
 def test_shared_problem_extra_expands_locally(tmp_path: Path) -> None:

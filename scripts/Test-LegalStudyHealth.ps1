@@ -27,15 +27,23 @@ if (Test-Path -LiteralPath $path) {
 $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
 $interactive = @(Get-CimInstance Win32_Process -Filter "Name='explorer.exe'" -ErrorAction SilentlyContinue).Count -gt 0
 $processVerified = $false
+$heartbeatFresh = $false
 if ($state -and $state.pid) {
     $process = Get-CimInstance Win32_Process -Filter ('ProcessId=' + [int]$state.pid) -ErrorAction SilentlyContinue
     $processVerified = $null -ne $process -and $process.CommandLine -match 'legal_study\.automation\.watch_service' -and $state.python -eq $python
-    if ($interactive -and (!$processVerified -or $now - [double]$state.heartbeat_at -gt 180)) { $issues.Add('WATCHER_NOT_HEALTHY_WHILE_LOGGED_ON') }
+    $heartbeatFresh = if ($null -ne $state.lease_expires_at) {
+        $now -le [double]$state.lease_expires_at
+    } else {
+        $now - [double]$state.heartbeat_at -le 180
+    }
+    if ($interactive -and (!$processVerified -or !$heartbeatFresh)) { $issues.Add('WATCHER_NOT_HEALTHY_WHILE_LOGGED_ON') }
     if ($state.status -eq 'failed') { $issues.Add('WATCHER_ABNORMAL_EXIT') }
     if ($state.last_error -and $now - [double]$state.last_error.at -lt 86400) { $issues.Add('RECENT_WORKER_ERROR') }
     if ($interactive -and !$state.pdf_available) { $issues.Add('PDF_SYNC_PATH_UNAVAILABLE_IN_USER_SESSION') }
+    if ($interactive -and $state.bridge_available -eq $false) { $issues.Add('CHAT_BRIDGE_PATH_UNAVAILABLE_IN_USER_SESSION') }
 } elseif ($interactive -and $task) { $issues.Add('HEARTBEAT_MISSING') }
-if ($info -and $info.LastTaskResult -notin @(0,267009,267011) -and (!$state -or $state.status -ne 'stopped')) { $issues.Add('TASK_LAST_RESULT_NONZERO') }
+$normalResidentTask = $task -and $task.State -eq 'Running' -and $info.LastTaskResult -in @(267009,2147946720)
+if ($info -and !$normalResidentTask -and $info.LastTaskResult -notin @(0,267009,267011) -and (!$state -or $state.status -ne 'stopped')) { $issues.Add('TASK_LAST_RESULT_NONZERO') }
 $logErrors = 0; $logBytes = 0L
 foreach ($name in @('supervisor.log','study.log','bridge.log','launcher.log')) {
     $path = Join-Path $root $name
@@ -69,12 +77,13 @@ if ((Test-Path -LiteralPath $snapshot) -and (Get-Item -LiteralPath $snapshot).Le
         if ($delta -gt 5GB) { $issues.Add('VOLUME_FREE_SPACE_DECREASE_OVER_5_GIB') }
     } catch { $issues.Add('PREVIOUS_HEALTH_UNREADABLE') }
 }
+$effectiveState = if ($state -and $processVerified -and $heartbeatFresh) { $state.status } elseif ($state) { 'stale' } else { 'Unknown' }
 $result = [pscustomobject]@{
     CheckedAt=(Get-Date).ToString('o'); Status=if($issues.Count){'WARN'}else{'OK'}
     TaskRegistered=($null -ne $task); TaskEnabled=($task -and $task.State -ne 'Disabled')
     TaskState=if($task){[string]$task.State}else{'Missing'}; LastTaskResult=if($info){$info.LastTaskResult}else{$null}
     Entrypoint=$entry; Python=$python; ProcessVerified=$processVerified
-    ServiceState=if($state){$state.status}else{'Unknown'}; RecentLogErrorLines=$logErrors
+    ServiceState=$effectiveState; RecentLogErrorLines=$logErrors
     CurrentLogBytes=$logBytes; FreeBytes=$free; FreeBytesDecrease=$delta
     RelatedTasks=$related
     StorageScope='Volume free-space delta and bounded logs; no recursive PDF/cache scan'
