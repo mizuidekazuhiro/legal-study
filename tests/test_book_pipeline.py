@@ -30,13 +30,14 @@ class CountingOcr:
 
     def recognize(self, image_path: Path) -> OcrResult:
         self.calls += 1
+        text = "B+ Rank" if "rank" in image_path.name else "国家の政策判断により"
         return OcrResult(
             engine=self.name,
-            text="国家の政策判断により",
+            text=text,
             confidence=0.99,
             lines=[
                 OcrLine(
-                    text="国家の政策判断により",
+                    text=text,
                     confidence=0.99,
                 )
             ],
@@ -48,7 +49,7 @@ def _book_pdf(path: Path, *, extra: str = "") -> None:
     document = pymupdf.open()
     texts = [
         "目次\n第5章 構成要件 19\n5-1 構成要件の概念 19\n5-2 構成要件要素 21",
-        f"第5章 構成要件\n〈構成要件の概念〉\n国家の政策半|｣断により{extra}",
+        f"第5章 構成要件\n〈構成要件の概念〉\n国家の政策半|｣断により{extra}\nBtRank",
         "第6章 実行行為\n〈実行行為の意義〉",
     ]
     printed = [None, 19, 25]
@@ -99,8 +100,8 @@ def test_pipeline_discovers_chapter_repairs_surgically_and_resumes(tmp_path: Pat
     )
 
     assert first.selected_pdf_pages == [2]
-    assert first.ocr_executed == 1
-    assert engine.calls == 1
+    assert first.ocr_executed == 2
+    assert engine.calls == 2
     assert second.processed == 0
     assert second.reused == 1
     assert second.ocr_executed == 0
@@ -115,6 +116,7 @@ def test_pipeline_discovers_chapter_repairs_surgically_and_resumes(tmp_path: Pat
     assert "国家の政策判断により" in content
     assert "国家の政策半|｣断により" not in content
     assert "PDF_PAGE:2 / PRINTED_PAGE:19" in content
+    assert any(item.text == "B+ Rank" for item in first.pages[0].annotations)
 
 
 def test_source_change_cannot_reuse_surgical_ocr_target(tmp_path: Path) -> None:
@@ -146,4 +148,4 @@ def test_source_change_cannot_reuse_surgical_ocr_target(tmp_path: Path) -> None:
         settings=settings,
     )
 
-    assert engine.calls == 2
+    assert engine.calls == 4

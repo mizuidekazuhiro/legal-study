@@ -57,7 +57,7 @@ from legal_study.settings import LocalSettings
 from legal_study.source_store import SourceSnapshot, verify_snapshot
 from legal_study.state import RunStateStore
 
-_PIPELINE_VERSION = "1"
+_PIPELINE_VERSION = "3"
 _STRUCTURE_VERSION = "1"
 _INSPECTION_VERSION = "1"
 _PAGES_VERSION = "1"
@@ -65,6 +65,7 @@ _CHAPTER_RE = re.compile(r"第\s*(\d+)\s*章\s*([^\r\n〈<く]+)")
 _SECTION_HEADER_RE = re.compile(r"[〈<く]\s*([^〉>）\r\n]+)\s*[〉>）]")
 _PRINTED_PAGE_RE = re.compile(r"(?:刑\s*[-－]\s*)?(\d{1,4})\s*$")
 _RANK_RE = re.compile(r"\b[ABC]\s*\+?\s*Rank\b", re.IGNORECASE)
+_RANK_CANDIDATE_RE = re.compile(r"\b[ABC](?:\+|t|†)?\s*Rank\b", re.IGNORECASE)
 
 
 class BookPipelineConfig(BaseModel):
@@ -913,17 +914,44 @@ class BookPipeline:
         text_records = []
         crop_dir = prepared.output_dir / "book_ocr_crops"
         for line_index, (raw_text, bbox) in enumerate(_native_lines(page), start=1):
-            if _RANK_RE.search(raw_text):
-                annotations.append(
-                    extract_rank_annotation(
-                        raw_text=raw_text,
-                        ocr_text=None,
-                        ocr_confidence=None,
-                        pdf_page=pdf_page,
-                        bbox=bbox,
-                        linked_heading=section.title,
+            if _RANK_CANDIDATE_RE.search(raw_text):
+                rank_ocr: OcrResult | None = None
+                rank_evidence_id: str | None = None
+                if not _RANK_RE.search(raw_text):
+                    crop_path = crop_dir / (
+                        f"page-{pdf_page:04d}-rank-{line_index:03d}.png"
                     )
+                    target = self._render_target(
+                        page,
+                        bbox,
+                        kind="book_rank_annotation",
+                        stable_page_id=stable_page_id,
+                        path=crop_path,
+                        dpi=self.config.surgical_dpi,
+                        artifact_root=prepared.output_dir,
+                    )
+                    target["native_candidate"] = raw_text
+                    rank_ocr, rank_evidence_id = self._ocr_target(
+                        stable_page_id=stable_page_id,
+                        target=target,
+                        image_path=crop_path,
+                        cache=cache,
+                        snapshot=snapshot,
+                        prepared=prepared,
+                        counters=counters,
+                    )
+                annotation = extract_rank_annotation(
+                    raw_text=raw_text if _RANK_RE.search(raw_text) else None,
+                    ocr_text=rank_ocr.text if rank_ocr else None,
+                    ocr_confidence=rank_ocr.confidence if rank_ocr else None,
+                    pdf_page=pdf_page,
+                    bbox=bbox,
+                    linked_heading=section.title,
                 )
+                annotation.raw_text = raw_text
+                if rank_evidence_id:
+                    annotation.evidence.append(f"ocr_evidence_id={rank_evidence_id}")
+                annotations.append(annotation)
                 continue
             if "cf." in raw_text.lower():
                 annotations.append(

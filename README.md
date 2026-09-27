@@ -124,6 +124,23 @@ legal-study ingest ".\materials\論文マスター_刑法.pdf" --subject crimina
 
 run内のJSONが参照するrender/cropのpathはrun-relativeなPOSIX形式です。runディレクトリを移動しても、同じディレクトリ構造のままartifactを解決できます。
 
+## Book / Corpus Mode
+
+問題単位の`ingest`とは別に、教材1冊をTOCの章・節単位でObsidianへ出力できます。PDF renderを原本 evidence とし、本文はnative-first、異常行だけsurgical OCR、図表はPNG crop、Rank・書込み・highlightはannotation layerとして保持します。ChatBridge、Notion、OpenAI APIは不要です。
+
+```powershell
+legal-study export-book ".\materials\00_基礎マスターテキスト1.pdf" `
+  --output "C:\Vault" --chapters 5 --ocr paddle `
+  --preserve-markup --verbatim --resume
+
+legal-study export-books ".\materials" --output "C:\Vault" `
+  --ocr paddle --preserve-markup --verbatim --resume
+```
+
+`--chapters`を省略するとTOCで特定した全章を同じpipelineで処理します。成果物は`<subject>/<book>/00_目次.md`、章folder、節Markdown、`assets/`、`book_manifest.json`です。既存Vault fileが同一bytesなら再利用し、異なる内容なら上書きせず停止します。run側はsource SHA-256、stable page ID、SQLite step state、page checkpoint、共有OCR cacheを使います。
+
+Book Modeのstatusは`NATIVE_VERIFIED / OCR_VERIFIED / VISUALLY_REPAIRED / NEEDS_REVIEW / UNRESOLVED`です。raw embedded textはmanifestから削除せず、数字・条文・年月日・引用・固有名詞と複数行OCR差分は自動修復しません。
+
 
 P1-Bまで完了済みのrunがある場合、OCRを再実行せずP1-C成果物だけを生成できます。
 

@@ -61,3 +61,17 @@ def test_unresolved_text_is_not_silently_copied_or_invented() -> None:
     assert result.raw_text == "政策半|｣断"
     assert result.canonical_text is None
     assert result.status == BookTextStatus.UNRESOLVED
+
+
+def test_multiline_ocr_with_handwriting_is_not_auto_repaired() -> None:
+    result = reconcile_text_record(
+        raw_text="ii 危険犯とは、法益侵害の危険を生じさせる",
+        ocr_text="→人命\n挙動\ni 危険犯とは、法益侵害の危険を生じさせる",
+        ocr_confidence=0.97,
+        pdf_page=33,
+        printed_page=23,
+        bbox=BBox(x0=60, y0=300, x1=400, y1=315),
+    )
+
+    assert result.canonical_text is None
+    assert result.status == BookTextStatus.NEEDS_REVIEW

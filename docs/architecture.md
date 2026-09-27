@@ -139,3 +139,28 @@ readable v1 marker shape and are never silently promoted to v2 verified evidence
 
 Anki, Obsidian, Notion, and Google Drive automation are intentionally outside the
 current scope. The packet is designed for manual upload to a ChatGPT Project.
+
+## Book / Corpus Mode
+
+Book Mode is a thin upper layer in `legal_study.book`; it does not repurpose the problem-oriented reconciliation/finalization workflow. It reuses immutable `SourceSnapshot`, SHA-256, `PdfInspector`, stable page IDs, `SharedOcrCache`, atomic publication, and `RunStateStore`.
+
+```text
+TOC native text + positioned fragments
+  -> printed-page / repeated-header cross-check
+  -> chapter and section ranges
+  -> selected-page inspection and ratio-based page zones
+  -> main-body native lines
+       -> suspicious line crop OCR only
+  -> raster/vector palette evidence -> highlight/annotation layer
+  -> ruled layout evidence -> figure PNG crop
+  -> conservative verification
+  -> chapter/section Obsidian export
+```
+
+Page zones separate header, footer, printed number, main body, left/right margin, binding edge, and memo area. Binding inference uses parity plus edge text/drawing/image distribution. A full-page raster background does not by itself downgrade otherwise usable main-body text.
+
+TOC is the structure authority. Positioned TOC fragments recover chapter number/title, printed start page, and Rank when normal reading order is corrupted; repeated body headers and outer-edge printed-page numbers resolve the corresponding PDF range. Offsets are represented as anchor segments rather than a permanent global constant.
+
+Figures remain visual assets and overlapping native/OCR text is not emitted as prose. Raster highlight detection uses HSV families and page components, preserving raw RGB, bbox, and intersected words without assigning legal meaning to color. Unreadable colored memo regions are cropped and retained as `NEEDS_REVIEW` instead of guessed.
+
+Every suspicious-line repair retains raw text, canonical text, PDF/printed page, bbox, OCR evidence ID, method, status, and reason. Protected numeric/citation content, multiline OCR contamination, and low-agreement candidates cannot enter canonical text automatically.

@@ -125,6 +125,7 @@ def reconcile_text_record(
     length_ratio = len(candidate) / max(len(native), 1)
     safe = (
         not protected
+        and len([line for line in ocr_text.splitlines() if line.strip()]) == 1
         and ocr_confidence >= 0.80
         and candidate_clean
         and 0.55 <= length_ratio <= 1.55
