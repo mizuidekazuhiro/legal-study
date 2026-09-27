@@ -587,6 +587,38 @@ def test_v2_packet_rejects_auto_verified_marker_without_verified_range(
         validate_chat_packet_structure(tampered)
 
 
+def test_v2_packet_rejects_auto_verified_independent_ocr_marker(
+    tmp_path: Path,
+) -> None:
+    run = _run(tmp_path)
+    _upgrade_run_to_v2(run)
+    result = build_chat_packet(run_dir=run)
+    packet = Path(result.packet_path)
+    tampered = tmp_path / "auto-verified-independent-ocr.zip"
+
+    with zipfile.ZipFile(packet) as source, zipfile.ZipFile(
+        tampered, "w", compression=zipfile.ZIP_DEFLATED
+    ) as target:
+        for name in source.namelist():
+            payload = source.read(name)
+            if name == "page_text.json":
+                page_text = json.loads(payload)
+                page_text["pages"][0]["source"] = "independent_full_page_ocr"
+                payload = json.dumps(page_text, ensure_ascii=False).encode("utf-8")
+            elif name == "marker_index.json":
+                marker_payload = json.loads(payload)
+                marker = marker_payload["logical_markers"][0]
+                marker["text_reference"]["source"] = "independent_full_page_ocr"
+                marker["review_status"] = "AUTO_VERIFIED"
+                marker["position_status"] = "VERIFIED"
+                marker["text_accuracy_status"] = "VERIFIED"
+                payload = json.dumps(marker_payload, ensure_ascii=False).encode("utf-8")
+            target.writestr(name, payload)
+
+    with pytest.raises(RuntimeError, match="structural validation failed"):
+        validate_chat_packet_structure(tampered)
+
+
 
 @pytest.mark.parametrize("tamper_level", ["payload", "marker"])
 def test_v2_packet_rejects_changed_range_semantics(

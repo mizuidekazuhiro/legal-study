@@ -212,6 +212,10 @@ def validate_chat_packet_structure(packet: Path) -> dict[str, Any]:
                             "exact_text"
                         )
                     auto_verified = marker.get("review_status") == "AUTO_VERIFIED"
+                    reference_source_valid = (
+                        reference.get("field") == "canonical_text"
+                        and reference.get("source") == page.get("source")
+                    )
                     auto_verified_consistent = (
                         not auto_verified
                         or (
@@ -223,11 +227,13 @@ def validate_chat_packet_structure(packet: Path) -> dict[str, Any]:
                             and range_valid
                             and marker.get("position_status") == "VERIFIED"
                             and marker.get("text_accuracy_status") == "VERIFIED"
+                            and page.get("source") == "reconciled_text"
                         )
                     )
                     marker_refs_valid = marker_refs_valid and (
                         digest == page.get("text_sha256") == reference.get("text_sha256")
                         and int(reference.get("page_number", -1)) == int(marker["page_number"])
+                        and reference_source_valid
                         and range_semantics_valid
                         and marker_range_semantics_valid
                         and range_valid
