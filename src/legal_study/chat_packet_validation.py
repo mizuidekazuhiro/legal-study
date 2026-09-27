@@ -120,11 +120,16 @@ def validate_chat_packet_structure(packet: Path) -> dict[str, Any]:
                     declared_marker_schema == "marker_index.v2"
                     and payload_marker_schema == "marker_index.v2"
                 )
+                range_semantics_valid = (
+                    marker_payload.get("range_semantics")
+                    == "page_unicode_codepoints_end_exclusive"
+                )
             else:
                 marker_schema_consistent = (
                     declared_marker_schema in {None, "marker_index.v1"}
                     and payload_marker_schema in {None, "marker_index.v1"}
                 )
+                range_semantics_valid = True
 
             page_text_present = "page_text.json" in names
             page_text_payload = (
@@ -197,6 +202,10 @@ def validate_chat_packet_structure(packet: Path) -> dict[str, Any]:
                     digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
                     start = marker.get("canonical_start_char")
                     end = marker.get("canonical_end_char_exclusive")
+                    marker_range_semantics_valid = (
+                        marker.get("character_range_semantics")
+                        == "page_unicode_codepoints_end_exclusive"
+                    )
                     range_valid = start is None and end is None and marker.get("exact_text") is None
                     if isinstance(start, int) and isinstance(end, int):
                         range_valid = 0 <= start <= end <= len(text) and text[start:end] == marker.get(
@@ -219,6 +228,8 @@ def validate_chat_packet_structure(packet: Path) -> dict[str, Any]:
                     marker_refs_valid = marker_refs_valid and (
                         digest == page.get("text_sha256") == reference.get("text_sha256")
                         and int(reference.get("page_number", -1)) == int(marker["page_number"])
+                        and range_semantics_valid
+                        and marker_range_semantics_valid
                         and range_valid
                         and auto_verified_consistent
                         and (
@@ -238,6 +249,7 @@ def validate_chat_packet_structure(packet: Path) -> dict[str, Any]:
                 }.issubset(names),
                 "packet_schema_supported": supported_packet_schema,
                 "marker_schema_matches_manifest": marker_schema_consistent,
+                "range_semantics_valid_for_v2": range_semantics_valid,
                 "page_text_present_for_v2": not marker_schema_v2 or page_text_present,
                 "page_text_schema_valid_for_v2": page_text_schema_valid,
                 "page_text_entries_valid_for_v2": not marker_schema_v2 or page_text_entries_valid,

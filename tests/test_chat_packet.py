@@ -585,3 +585,34 @@ def test_v2_packet_rejects_auto_verified_marker_without_verified_range(
 
     with pytest.raises(RuntimeError, match="structural validation failed"):
         validate_chat_packet_structure(tampered)
+
+
+
+@pytest.mark.parametrize("tamper_level", ["payload", "marker"])
+def test_v2_packet_rejects_changed_range_semantics(
+    tmp_path: Path, tamper_level: str
+) -> None:
+    run = _run(tmp_path)
+    _upgrade_run_to_v2(run)
+    result = build_chat_packet(run_dir=run)
+    packet = Path(result.packet_path)
+    tampered = tmp_path / f"range-semantics-{tamper_level}.zip"
+
+    with zipfile.ZipFile(packet) as source, zipfile.ZipFile(
+        tampered, "w", compression=zipfile.ZIP_DEFLATED
+    ) as target:
+        for name in source.namelist():
+            payload = source.read(name)
+            if name == "marker_index.json":
+                marker_payload = json.loads(payload)
+                if tamper_level == "payload":
+                    marker_payload["range_semantics"] = "utf16_end_inclusive"
+                else:
+                    marker_payload["logical_markers"][0][
+                        "character_range_semantics"
+                    ] = "utf16_end_inclusive"
+                payload = json.dumps(marker_payload, ensure_ascii=False).encode("utf-8")
+            target.writestr(name, payload)
+
+    with pytest.raises(RuntimeError, match="structural validation failed"):
+        validate_chat_packet_structure(tampered)
