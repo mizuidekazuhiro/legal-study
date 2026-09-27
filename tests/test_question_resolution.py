@@ -1,9 +1,12 @@
 from pathlib import Path
 
 import pymupdf
+import pytest
+from PIL import Image
 
 from legal_study.completion.done_marker import done_stamp_png_bytes
 from legal_study.completion.question_resolution import (
+    _render_header_crop,
     apply_done_markers,
     resolve_question_for_done_page,
 )
@@ -43,6 +46,31 @@ def _question_pdf(path: Path, *, done_page: int = 5) -> None:
             )
     document.save(path)
     document.close()
+
+
+@pytest.mark.parametrize(
+    ("rotation", "expected_size"),
+    [(0, (200, 28)), (90, (100, 56)), (180, (200, 28)), (270, (100, 56))],
+)
+def test_header_crop_uses_visual_top_after_page_rotation(
+    tmp_path: Path,
+    rotation: int,
+    expected_size: tuple[int, int],
+) -> None:
+    pdf = tmp_path / "rotated.pdf"
+    document = pymupdf.open()
+    page = document.new_page(width=200, height=100)
+    page.set_rotation(rotation)
+    document.save(pdf)
+    document.close()
+    document = pymupdf.open(pdf)
+    crop = tmp_path / f"crop-{rotation}.png"
+
+    _render_header_crop(document[0], crop, dpi=72, height_ratio=0.28)
+    document.close()
+
+    with Image.open(crop) as image:
+        assert image.size == expected_size
 
 
 def test_resolver_uses_nearest_preceding_exact_question_header(tmp_path: Path) -> None:

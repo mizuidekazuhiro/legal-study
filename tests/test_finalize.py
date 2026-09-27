@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pymupdf
+import pytest
 
 from legal_study.finalize import finalize_existing_run
 from legal_study.io_utils import file_sha256
@@ -42,3 +43,32 @@ def test_finalize_existing_run_does_not_change_ocr_artifact(tmp_path: Path) -> N
     assert result["problem_validation"]["valid"] is True
     assert result["problem_markdown"] == "criminal_finalize_problem.md"
     assert (prepared.output_dir / result["problem_markdown"]).is_file()
+
+
+@pytest.mark.parametrize(
+    "artifact_name",
+    ["inspection.json", "ocr.json", "review_manifest.json"],
+)
+def test_finalize_rejects_p1b_artifact_changed_after_recording(
+    tmp_path: Path,
+    artifact_name: str,
+) -> None:
+    source = tmp_path / "source.pdf"
+    _pdf(source)
+    settings = LocalSettings(home=tmp_path / "home")
+    snapshot = snapshot_source(source, settings=settings)
+    pipeline = PdfIngestPipeline()
+    prepared = prepare_run(
+        snapshot=snapshot,
+        subject="criminal",
+        question="finalize-integrity",
+        pages=[1],
+        pipeline_config=pipeline.input_config(),
+        settings=settings,
+    )
+    pipeline.run(snapshot, prepared, pages=[1])
+    artifact = prepared.output_dir / artifact_name
+    artifact.write_bytes(artifact.read_bytes() + b" ")
+
+    with pytest.raises(RuntimeError, match="P1-B artifact integrity mismatch"):
+        finalize_existing_run(prepared.output_dir, settings=settings)

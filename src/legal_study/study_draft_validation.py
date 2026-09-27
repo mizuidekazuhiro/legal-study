@@ -299,11 +299,18 @@ def _validate_source_identity(
         "source_sha256": draft.source.source_sha256,
         "source_pages": draft.source.requested_pages,
     }
+    canonical_pages = [
+        int(page["page_number"])
+        for page in canonical.get("pages", [])
+        if isinstance(page, dict) and page.get("page_number") is not None
+    ]
     actual = {
         "subject": canonical.get("subject"),
         "question": canonical.get("question"),
         "source_sha256": canonical_source.get("sha256"),
-        "source_pages": canonical_source.get("requested_pages"),
+        "source_pages": canonical_source.get("requested_pages")
+        if canonical_source.get("requested_pages") is not None
+        else canonical_pages,
     }
     for key, value in expected.items():
         if actual.get(key) != value:
@@ -315,13 +322,16 @@ def _validate_source_identity(
                 )
             )
 
+    handoff_identity = dict(handoff_frontmatter)
+    if handoff_identity.get("source_pages") is None:
+        handoff_identity["source_pages"] = canonical_pages
     for key, value in expected.items():
-        if handoff_frontmatter.get(key) != value:
+        if handoff_identity.get(key) != value:
             issues.append(
                 StudyDraftValidationIssue(
                     code="HANDOFF_IDENTITY_MISMATCH",
                     message=(
-                        f"Handoff {key}={handoff_frontmatter.get(key)!r}, "
+                        f"Handoff {key}={handoff_identity.get(key)!r}, "
                         f"draft has {value!r}"
                     ),
                     location=f"source.{key}",

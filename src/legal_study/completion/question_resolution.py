@@ -3,9 +3,11 @@ from __future__ import annotations
 import re
 import unicodedata
 import uuid
+from io import BytesIO
 from pathlib import Path
 
 import pymupdf
+from PIL import Image
 from pydantic import BaseModel, Field
 
 from legal_study.completion.done_marker import DoneDetection, detect_done_markers
@@ -177,10 +179,10 @@ def _render_header_crop(
     dpi: int,
     height_ratio: float,
 ) -> None:
-    height = page.rect.height * height_ratio
-    clip = pymupdf.Rect(page.rect.x0, page.rect.y0, page.rect.x1, page.rect.y0 + height)
-    pixmap = page.get_pixmap(dpi=dpi, clip=clip, alpha=False)
-    pixmap.save(path)
+    pixmap = page.get_pixmap(dpi=dpi, alpha=False)
+    with Image.open(BytesIO(pixmap.tobytes("png"))) as rendered:
+        height = max(1, round(rendered.height * height_ratio))
+        rendered.crop((0, 0, rendered.width, height)).save(path)
 
 
 def resolve_question_for_done_page(

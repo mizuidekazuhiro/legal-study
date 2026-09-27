@@ -206,6 +206,33 @@ def test_response_must_cover_each_canonical_review_sheet_once(tmp_path: Path) ->
     assert {issue.code for issue in duplicate.issues} >= {"VISUAL_REVIEW_PAGES_DUPLICATE"}
 
 
+def test_all_pages_null_identity_normalizes_to_canonical_page_list(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_run(run_dir)
+    canonical_path = run_dir / "canonical_source.json"
+    canonical = json.loads(canonical_path.read_text(encoding="utf-8"))
+    canonical["source"]["requested_pages"] = None
+    canonical_path.write_text(json.dumps(canonical, ensure_ascii=False), encoding="utf-8")
+    handoff_path = run_dir / "criminal_22_handoff.md"
+    handoff_path.write_text(
+        handoff_path.read_text(encoding="utf-8").replace(
+            "source_pages: [110]", "source_pages: null"
+        ),
+        encoding="utf-8",
+    )
+
+    result = accept_study_draft_response(
+        raw_response_text=_raw(_payload()),
+        run_dir=run_dir,
+    )
+
+    assert result.accepted is True
+    assert result.issues == []
+
+
 def test_invalid_json_is_rejected_without_output(tmp_path: Path) -> None:
     run_dir = tmp_path / "run"
     run_dir.mkdir()

@@ -10,7 +10,7 @@ from legal_study.pdf.pipeline import PdfIngestPipeline
 from legal_study.problem_packet import handoff_markdown_filename
 from legal_study.run_manifest import PreparedRun, RunManifest
 from legal_study.settings import LocalSettings
-from legal_study.state import RunStateStore
+from legal_study.state import RunStateStore, StepStatus
 
 
 def finalize_existing_run(
@@ -63,6 +63,21 @@ def finalize_existing_run(
         raise RuntimeError("Inspection render bundle is incomplete or has invalid paths")
     ocr_hash = file_sha256(required["ocr"])
     review_hash = file_sha256(required["review"])
+    for step_name, actual_hash in (
+        ("PDF_INSPECTED", inspection_hash),
+        ("OCR_COMPLETE", ocr_hash),
+        ("REVIEW_MANIFEST_WRITTEN", review_hash),
+    ):
+        record = state.get_step(manifest.run_id, step_name)
+        if (
+            record is None
+            or record.status != StepStatus.COMPLETED
+            or record.output_hash != actual_hash
+        ):
+            raise RuntimeError(
+                f"P1-B artifact integrity mismatch for {step_name}; "
+                "refusing to finalize altered or unrecorded evidence"
+            )
 
     reconciliation, reconciliation_hash = pipeline._reconciliation_step(
         state,
