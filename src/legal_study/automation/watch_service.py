@@ -31,11 +31,11 @@ def bridge_paths_available(bridge_root: Path, obsidian_inbox: Path) -> bool:
 
 
 def record_child_exit(
-    state: dict[str, object], *, name: str, code: int, now: float
+    state: dict[str, object], *, name: str, code: int, now: float, intentional: bool = False
 ) -> None:
     """Record abnormal exits without turning intentional code-0 exits into errors."""
 
-    if code != 0:
+    if code != 0 and not intentional:
         state["last_error"] = {
             "at": now,
             "worker": name,
@@ -160,6 +160,7 @@ def main():
     log = logger_for(root, "supervisor")
     job = ChildJob()
     children = {}
+    intentional_stops: set[str] = set()
     restart_after = {}
     state = {
         "pid": os.getpid(),
@@ -264,12 +265,21 @@ def main():
                 if code is not None:
                     children.pop(name, None)
                     restart_after[name] = time.monotonic() + child_restart_seconds
-                    record_child_exit(state, name=name, code=code, now=time.time())
-                    log_method = log.info if code == 0 else log.warning
+                    intentional = name in intentional_stops
+                    intentional_stops.discard(name)
+                    record_child_exit(
+                        state,
+                        name=name,
+                        code=code,
+                        now=time.time(),
+                        intentional=intentional,
+                    )
+                    log_method = log.info if code == 0 or intentional else log.warning
                     log_method(
-                        "%s exited code=%s; restart in %.1f seconds",
+                        "%s exited code=%s intentional=%s; restart in %.1f seconds",
                         name,
                         code,
+                        intentional,
                         child_restart_seconds,
                     )
             paths_now_available = bridge_paths_available(bridge, inbox)
@@ -288,6 +298,7 @@ def main():
                         "Drive bridge paths unavailable; stopping study worker pid=%s",
                         study_child.pid,
                     )
+                    intentional_stops.add("study")
                     study_child.terminate()
             if (
                 "bridge" not in children

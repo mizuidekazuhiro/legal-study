@@ -178,6 +178,37 @@ def test_obsidian_only_validation_ignores_anki_policy_fields(tmp_path: Path) -> 
     assert obsidian.issues == []
 
 
+@pytest.mark.parametrize(
+    ("subject", "display_subject"),
+    [("constitutional", "憲法"), ("administrative", "行政法")],
+)
+def test_full_validation_requires_problem_cards_for_every_supported_subject(
+    tmp_path: Path,
+    subject: str,
+    display_subject: str,
+) -> None:
+    run = _run(tmp_path)
+    manifest_path = run / "run_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["subject"] = subject
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    payload = _payload()
+    payload["source"]["subject"] = subject
+    payload["anki_cards"] = []
+    payload["problem_card_extra"] = None
+    payload["obsidian_note"]["relative_path"] = (
+        f"30_論文マスター/{display_subject}/{display_subject}_第12問.md"
+    )
+    result_file = tmp_path / "study_result.json"
+    result_file.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    report = validate_chat_result(result_path=result_file, run_dir=run)
+
+    assert report.valid is False
+    assert "PROBLEM_CARDS_MISSING" in report.issues
+    assert "CRIMINAL_L4_B_CARD_MISSING" not in report.issues
+
+
 def test_problem_card_page_must_be_in_requested_pages(tmp_path: Path) -> None:
     run = _run(tmp_path)
     payload = _payload()

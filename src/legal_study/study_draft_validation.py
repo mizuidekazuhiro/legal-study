@@ -111,6 +111,36 @@ def validate_study_draft_evidence(
         int(page): str(path)
         for page, path in dict(canonical.get("handoff_review_sheets", {})).items()
     }
+    submitted_pages = [review.page_number for review in draft.visual_reviews]
+    duplicate_pages = sorted(
+        page for page in set(submitted_pages) if submitted_pages.count(page) > 1
+    )
+    missing_pages = sorted(set(expected_sheets) - set(submitted_pages))
+    unexpected_pages = sorted(set(submitted_pages) - set(expected_sheets))
+    if missing_pages:
+        issues.append(
+            StudyDraftValidationIssue(
+                code="VISUAL_REVIEW_PAGES_MISSING",
+                message=f"Visual reviews are missing PDF pages: {missing_pages}",
+                location="visual_reviews",
+            )
+        )
+    if duplicate_pages:
+        issues.append(
+            StudyDraftValidationIssue(
+                code="VISUAL_REVIEW_PAGES_DUPLICATE",
+                message=f"Visual reviews contain duplicate PDF pages: {duplicate_pages}",
+                location="visual_reviews",
+            )
+        )
+    if unexpected_pages:
+        issues.append(
+            StudyDraftValidationIssue(
+                code="VISUAL_REVIEW_PAGES_UNEXPECTED",
+                message=f"Visual reviews contain unexpected PDF pages: {unexpected_pages}",
+                location="visual_reviews",
+            )
+        )
     for index, review in enumerate(draft.visual_reviews):
         location = f"visual_reviews[{index}]"
         expected = expected_sheets.get(review.page_number)

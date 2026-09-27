@@ -173,6 +173,9 @@ def validate_chat_result(
         ):
             issues.append("PROBLEM_CARD_EXTRA_MISSING")
 
+        if not problem_cards:
+            issues.append("PROBLEM_CARDS_MISSING")
+
         if manifest.subject == "criminal":
             if not any(
                 card.scope == "problem"

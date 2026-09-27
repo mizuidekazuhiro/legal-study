@@ -112,6 +112,20 @@ def test_clean_child_exit_does_not_set_last_error() -> None:
     }
 
 
+def test_intentional_nonzero_child_exit_does_not_set_last_error() -> None:
+    state: dict[str, object] = {"last_error": None}
+
+    record_child_exit(
+        state,
+        name="study",
+        code=1,
+        now=101.0,
+        intentional=True,
+    )
+
+    assert state["last_error"] is None
+
+
 def test_stale_heartbeat_is_not_alive() -> None:
     state = {"pid": 123, "heartbeat_at": 100.0, "lease_expires_at": 130.0}
 

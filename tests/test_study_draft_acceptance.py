@@ -180,6 +180,32 @@ def test_valid_response_is_accepted_and_saved_atomically(tmp_path: Path) -> None
     assert not list(run_dir.glob(".study_draft.json.*.tmp"))
 
 
+def test_response_must_cover_each_canonical_review_sheet_once(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_run(run_dir)
+    payload = _payload()
+    payload["visual_reviews"] = []
+
+    missing = accept_study_draft_response(
+        raw_response_text=_raw(payload),
+        run_dir=run_dir,
+    )
+
+    assert missing.accepted is False
+    assert {issue.code for issue in missing.issues} >= {"VISUAL_REVIEW_PAGES_MISSING"}
+
+    payload = _payload()
+    payload["visual_reviews"].append(dict(payload["visual_reviews"][0]))
+    duplicate = accept_study_draft_response(
+        raw_response_text=_raw(payload),
+        run_dir=run_dir,
+    )
+
+    assert duplicate.accepted is False
+    assert {issue.code for issue in duplicate.issues} >= {"VISUAL_REVIEW_PAGES_DUPLICATE"}
+
+
 def test_invalid_json_is_rejected_without_output(tmp_path: Path) -> None:
     run_dir = tmp_path / "run"
     run_dir.mkdir()
