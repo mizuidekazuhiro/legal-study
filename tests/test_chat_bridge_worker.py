@@ -231,6 +231,47 @@ def test_result_hash_mismatch_is_receipted_without_writing_obsidian(tmp_path: Pa
     assert not list(inbox.rglob("*.md"))
 
 
+def test_command_source_mismatch_is_receipted_without_writing_obsidian(tmp_path: Path) -> None:
+    settings = LocalSettings(home=tmp_path / "home")
+    settings.ensure()
+    _run, run_id, source_sha = _write_run(settings)
+    bridge = tmp_path / "LegalStudy_ChatBridge"
+    for name in ("10_approved", "20_commands", "30_receipts", "99_failed"):
+        (bridge / name).mkdir(parents=True)
+
+    result_file = bridge / "10_approved" / "approved.json"
+    _write_result(result_file, source_sha)
+    command = {
+        "schema_version": "chat_bridge_command.v1",
+        "command_id": "source-mismatch-001",
+        "action": "apply_obsidian",
+        "subject": "criminal",
+        "question": "16",
+        "source_sha256": "b" * 64,
+        "run_id": run_id,
+        "result_file": "10_approved/approved.json",
+        "result_sha256": file_sha256(result_file),
+        "approved_at": "2026-09-23T00:00:00Z",
+        "approval_text": "承認",
+    }
+    command_path = bridge / "20_commands" / "source-mismatch.json"
+    command_path.write_text(json.dumps(command, ensure_ascii=False), encoding="utf-8")
+    inbox = tmp_path / "Obsidian_Inbox"
+    inbox.mkdir()
+
+    outcome = process_bridge_command(
+        command_path=command_path,
+        bridge_root=bridge,
+        obsidian_inbox=inbox,
+        settings=settings,
+    )
+
+    assert outcome.status == "FAILED"
+    receipt = json.loads(Path(outcome.receipt_path or "").read_text(encoding="utf-8"))
+    assert "Could not resolve exactly one local run" in receipt["error"]
+    assert not list(inbox.rglob("*.md"))
+
+
 def test_notion_command_requires_explicit_authorization(tmp_path: Path) -> None:
     settings = LocalSettings(home=tmp_path / "home")
     settings.ensure()
