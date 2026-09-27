@@ -156,6 +156,84 @@ def test_obsidian_command_is_idempotent_and_receipted(tmp_path: Path) -> None:
     assert second.status == "ALREADY_COMPLETED"
 
 
+def test_success_receipt_restores_missing_local_ledger(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = LocalSettings(home=tmp_path / "home")
+    settings.ensure()
+    _run, run_id, source_sha = _write_run(settings)
+    bridge = tmp_path / "bridge"
+    for name in ("10_approved", "20_commands", "30_receipts", "99_failed"):
+        (bridge / name).mkdir(parents=True)
+    result_file = bridge / "10_approved" / "result.json"
+    _write_result(result_file, source_sha)
+    command = BridgeCommand(
+        command_id="restore-001", action="apply_obsidian", subject="criminal",
+        question="16", source_sha256=source_sha, run_id=run_id,
+        result_file="10_approved/result.json", result_sha256=file_sha256(result_file),
+        approved_at="2026-09-23T00:00:00Z", approval_text="承認",
+    )
+    command_path = bridge / "20_commands" / "restore.json"
+    command_path.write_text(command.model_dump_json(), encoding="utf-8")
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    first = process_bridge_command(
+        command_path=command_path, bridge_root=bridge,
+        obsidian_inbox=inbox, settings=settings,
+    )
+    assert first.status == "SUCCESS"
+    settings.state_db.unlink()
+    monkeypatch.setattr(
+        bridge_worker,
+        "apply_chat_result",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("durable receipt must prevent replay")
+        ),
+    )
+
+    second = process_bridge_command(
+        command_path=command_path, bridge_root=bridge,
+        obsidian_inbox=inbox, settings=settings,
+    )
+
+    assert second.processed is False
+    assert second.status == "ALREADY_COMPLETED"
+
+
+def test_command_id_collision_is_failed_without_raising(tmp_path: Path) -> None:
+    settings = LocalSettings(home=tmp_path / "home")
+    settings.ensure()
+    bridge = tmp_path / "bridge"
+    for name in ("10_approved", "20_commands", "30_receipts", "99_failed"):
+        (bridge / name).mkdir(parents=True)
+    command = BridgeCommand(
+        command_id="collision-001", action="apply_obsidian", subject="criminal",
+        question="16", source_sha256="a" * 64, run_id="r" * 64,
+        result_file="10_approved/missing.json", result_sha256="b" * 64,
+        approved_at="2026-09-23T00:00:00Z", approval_text="承認",
+    )
+    command_path = bridge / "20_commands" / "collision.json"
+    command_path.write_text(command.model_dump_json(), encoding="utf-8")
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    first = process_bridge_command(
+        command_path=command_path, bridge_root=bridge,
+        obsidian_inbox=inbox, settings=settings,
+    )
+    assert first.status == "FAILED"
+    changed = command.model_copy(update={"approval_text": "再承認"})
+    command_path.write_text(changed.model_dump_json(), encoding="utf-8")
+
+    second = process_bridge_command(
+        command_path=command_path, bridge_root=bridge,
+        obsidian_inbox=inbox, settings=settings,
+    )
+
+    assert second.status == "FAILED"
+    assert "reused with different command bytes" in (second.error or "")
+    assert Path(second.receipt_path or "").name.startswith("collision-")
+
+
 def test_obsidian_only_command_does_not_require_anki_payload(tmp_path: Path) -> None:
     settings = LocalSettings(home=tmp_path / "home")
     settings.ensure()

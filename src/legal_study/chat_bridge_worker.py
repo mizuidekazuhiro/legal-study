@@ -214,6 +214,40 @@ class BridgeStateStore:
                 ),
             )
 
+    def restore_completed(
+        self, command_id: str, command_sha256: str, receipt_path: Path
+    ) -> None:
+        """Rebuild a missing ledger row from a validated durable success receipt."""
+        now = self._now()
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT command_sha256 FROM chat_bridge_commands WHERE command_id = ?",
+                (command_id,),
+            ).fetchone()
+            if row is not None and row["command_sha256"] != command_sha256:
+                raise RuntimeError("command_id was reused with different command bytes")
+            connection.execute(
+                """
+                INSERT INTO chat_bridge_commands (
+                    command_id, command_sha256, state, last_error,
+                    receipt_path, created_at, updated_at
+                ) VALUES (?, ?, ?, NULL, ?, ?, ?)
+                ON CONFLICT(command_id) DO UPDATE SET
+                    state = excluded.state,
+                    last_error = NULL,
+                    receipt_path = excluded.receipt_path,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    command_id,
+                    command_sha256,
+                    BridgeCommandState.COMPLETED.value,
+                    str(receipt_path),
+                    now,
+                    now,
+                ),
+            )
+
     def fail(self, command_id: str, error: str, receipt_path: Path | None = None) -> None:
         with self._connect() as connection:
             connection.execute(
@@ -334,11 +368,77 @@ def process_bridge_command(
 
     command_sha = file_sha256(command_file)
     command = BridgeCommand.model_validate_json(command_file.read_text(encoding="utf-8"))
-    state = BridgeStateStore(cfg.state_db)
-    begin_state = state.begin(command.command_id, command_sha)
-
     receipt_path = layout.receipts / f"{command.command_id}.receipt.json"
     failed_path = layout.failed / f"{command.command_id}.receipt.json"
+    state = BridgeStateStore(cfg.state_db)
+
+    if receipt_path.is_file():
+        try:
+            durable = BridgeReceipt.model_validate_json(
+                receipt_path.read_text(encoding="utf-8")
+            )
+            if (
+                durable.status != "success"
+                or durable.command_id != command.command_id
+                or durable.command_sha256 != command_sha
+                or durable.result_sha256 != command.result_sha256
+                or durable.source_sha256 != command.source_sha256
+                or durable.run_id != command.run_id
+            ):
+                raise RuntimeError("Existing success receipt does not match command")
+            state.restore_completed(command.command_id, command_sha, receipt_path)
+        except Exception as exc:  # noqa: BLE001 -- contain durable-state conflicts
+            conflict_path = (
+                layout.failed / f"receipt-conflict-{command_sha[:16]}.receipt.json"
+            )
+            atomic_write_json(
+                conflict_path,
+                {
+                    "schema_version": "chat_bridge_receipt_conflict.v1",
+                    "status": "failed",
+                    "command_id": command.command_id,
+                    "command_sha256": command_sha,
+                    "processed_at": datetime.now(UTC).isoformat(),
+                    "error": repr(exc),
+                },
+            )
+            return BridgeWorkerResult(
+                processed=True,
+                command_id=command.command_id,
+                status="FAILED",
+                receipt_path=str(conflict_path),
+                error=repr(exc),
+            )
+        else:
+            return BridgeWorkerResult(
+                processed=False,
+                command_id=command.command_id,
+                status="ALREADY_COMPLETED",
+                receipt_path=str(receipt_path),
+            )
+
+    try:
+        begin_state = state.begin(command.command_id, command_sha)
+    except RuntimeError as exc:
+        collision_path = layout.failed / f"collision-{command_sha[:16]}.receipt.json"
+        atomic_write_json(
+            collision_path,
+            {
+                "schema_version": "chat_bridge_command_collision.v1",
+                "status": "failed",
+                "command_id": command.command_id,
+                "command_sha256": command_sha,
+                "processed_at": datetime.now(UTC).isoformat(),
+                "error": repr(exc),
+            },
+        )
+        return BridgeWorkerResult(
+            processed=True,
+            command_id=command.command_id,
+            status="FAILED",
+            receipt_path=str(collision_path),
+            error=repr(exc),
+        )
 
     if begin_state == "done":
         return BridgeWorkerResult(

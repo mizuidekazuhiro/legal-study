@@ -193,6 +193,24 @@ def test_worker_failure_returns_question_to_sync_stable(tmp_path: Path) -> None:
     assert item.status == WorkStatus.PENDING
 
 
+def test_worker_dead_letters_deterministic_failure_after_bounded_attempts(
+    tmp_path: Path,
+) -> None:
+    settings, queue, _questions, _source_sha = _queue_question(tmp_path)
+    pipeline = FakePipeline(fail=True)
+
+    first = process_next_work_item(pipeline=pipeline, settings=settings)
+    second = process_next_work_item(pipeline=pipeline, settings=settings)
+    third = process_next_work_item(pipeline=pipeline, settings=settings)
+
+    assert first.queue_status == WorkStatus.PENDING
+    assert second.queue_status == WorkStatus.PENDING
+    assert third.queue_status == WorkStatus.FAILED
+    item = queue.get_work_item(third.work_item_id or -1)
+    assert item is not None
+    assert item.attempt_count == 3
+
+
 def test_worker_resumes_question_left_processing_after_crash(tmp_path: Path) -> None:
     settings, queue, questions, source_sha = _queue_question(tmp_path)
     questions.transition("criminal", "22", QuestionStatus.PROCESSING)

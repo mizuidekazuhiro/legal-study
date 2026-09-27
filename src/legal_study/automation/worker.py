@@ -31,6 +31,9 @@ class QueueWorkerResult(BaseModel):
     error: str | None = None
 
 
+MAX_INGEST_ATTEMPTS = 3
+
+
 def _resolve_stable_pages(
     *,
     stable_page_ids: list[str],
@@ -196,9 +199,10 @@ def process_next_work_item(
         elif current is not None:
             result.question_status = current.status
 
+        should_retry = retryable_failure and item.attempt_count < MAX_INGEST_ATTEMPTS
         failed = (
             queue.mark_retryable(item.id, repr(exc))
-            if retryable_failure
+            if should_retry
             else queue.mark_failed(item.id, repr(exc))
         )
         result.queue_status = failed.status
@@ -224,6 +228,9 @@ def drain_pending_work(
         if not result.claimed:
             break
         results.append(result)
-        if result.reason == "INGEST_FAILED":
+        if (
+            result.reason == "INGEST_FAILED"
+            and result.queue_status == WorkStatus.PENDING
+        ):
             break
     return results
