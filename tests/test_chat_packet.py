@@ -280,7 +280,7 @@ def _upgrade_run_to_v2(run: Path) -> tuple[str, str]:
 
 def test_v2_packet_keeps_verified_page_text_marker_range_and_evidence(tmp_path: Path) -> None:
     run = _run(tmp_path)
-    text, digest = _upgrade_run_to_v2(run)
+    _, digest = _upgrade_run_to_v2(run)
 
     result = build_chat_packet(run_dir=run)
 
