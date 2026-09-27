@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import zipfile
@@ -32,9 +33,7 @@ def validate_material_completeness(run_dir: Path) -> dict[str, Any]:
         for line in normalized.splitlines()
         if re.fullmatch(rf"第\s*{question}\s*問(?:\s+.*)?", line.strip())
     ]
-    valid_title = any(
-        not any(role in line for role in _AUXILIARY) for line in title_lines
-    )
+    valid_title = any(not any(role in line for role in _AUXILIARY) for line in title_lines)
     booklet_start = bool(re.search(rf"(?<!\d){question}\s*-\s*1(?!\d)", normalized))
     problem_cue = any(cue in normalized for cue in _PROBLEM_CUES)
     answer_start = any(value in normalized for value in _ANSWER_START)
@@ -57,11 +56,7 @@ def validate_material_completeness(run_dir: Path) -> dict[str, Any]:
     )
     answer_end_offset = max(normalized.rfind(value) for value in _ANSWER_END)
     requested = list(manifest.requested_pages or [])
-    text_pages = [
-        page
-        for page in requested
-        if f"## PDF page {page}" in normalized
-    ]
+    text_pages = [page for page in requested if f"## PDF page {page}" in normalized]
     image_pages = [
         page
         for page in requested
@@ -109,10 +104,157 @@ def validate_chat_packet_structure(packet: Path) -> dict[str, Any]:
             crc_ok = archive.testzip() is None
             manifest = json.loads(archive.read("packet_manifest.json"))
             requested = [int(page) for page in manifest.get("requested_pages") or []]
-            expected_reviews = {
-                f"review/page-{page:04d}-review.png" for page in requested
-            }
+            expected_reviews = {f"review/page-{page:04d}-review.png" for page in requested}
             handoff = archive.read("handoff.md").decode("utf-8")
+            marker_payload = json.loads(archive.read("marker_index.json"))
+            logical_markers_value = marker_payload.get("logical_markers")
+            logical_markers_are_list = isinstance(logical_markers_value, list)
+            logical_markers = logical_markers_value if logical_markers_are_list else []
+            packet_schema = manifest.get("schema_version")
+            supported_packet_schema = packet_schema in {"chat_packet.v1", "chat_packet.v2"}
+            marker_schema_v2 = packet_schema == "chat_packet.v2"
+            declared_marker_schema = manifest.get("marker_index_schema_version")
+            payload_marker_schema = marker_payload.get("schema_version")
+            if marker_schema_v2:
+                marker_schema_consistent = (
+                    declared_marker_schema == "marker_index.v2"
+                    and payload_marker_schema == "marker_index.v2"
+                )
+                range_semantics_valid = (
+                    marker_payload.get("range_semantics")
+                    == "page_unicode_codepoints_end_exclusive"
+                )
+            else:
+                marker_schema_consistent = (
+                    declared_marker_schema in {None, "marker_index.v1"}
+                    and payload_marker_schema in {None, "marker_index.v1"}
+                )
+                range_semantics_valid = True
+
+            page_text_present = "page_text.json" in names
+            page_text_payload = (
+                json.loads(archive.read("page_text.json"))
+                if marker_schema_v2 and page_text_present
+                else {"pages": []}
+            )
+            page_text_schema_valid = (
+                not marker_schema_v2
+                or page_text_payload.get("schema_version") == "page_text.v1"
+            )
+            raw_page_text_entries = page_text_payload.get("pages", [])
+            page_text_entries_valid = isinstance(raw_page_text_entries, list) and all(
+                isinstance(page, dict) and page.get("page_number") is not None
+                for page in raw_page_text_entries
+            )
+            page_text_entries = raw_page_text_entries if page_text_entries_valid else []
+            page_text_numbers = [int(page["page_number"]) for page in page_text_entries]
+            page_text_pages_match_manifest = (
+                not marker_schema_v2
+                or (
+                    len(page_text_numbers) == len(requested)
+                    and len(page_text_numbers) == len(set(page_text_numbers))
+                    and set(page_text_numbers) == set(requested)
+                )
+            )
+            page_text_hashes_valid = (
+                not marker_schema_v2
+                or (
+                    page_text_pages_match_manifest
+                    and all(
+                        isinstance(page.get("text"), str)
+                        and isinstance(page.get("text_sha256"), str)
+                        and page["text_sha256"]
+                        == hashlib.sha256(page["text"].encode("utf-8")).hexdigest()
+                        for page in page_text_entries
+                    )
+                )
+            )
+            page_texts = {
+                int(page["page_number"]): page
+                for page in page_text_entries
+            }
+            declared_marker_count = manifest.get("logical_marker_count")
+            marker_count_matches_manifest = (
+                not marker_schema_v2
+                or (
+                    type(declared_marker_count) is int
+                    and logical_markers_are_list
+                    and len(logical_markers) == declared_marker_count
+                )
+            )
+            marker_refs_valid = (
+                not marker_schema_v2
+                or (
+                    marker_schema_consistent
+                    and page_text_present
+                    and page_text_schema_valid
+                    and marker_count_matches_manifest
+                )
+            )
+            if marker_schema_v2:
+                for marker in logical_markers:
+                    page = page_texts.get(int(marker["page_number"]))
+                    reference = marker.get("text_reference")
+                    if page is None or not isinstance(reference, dict):
+                        marker_refs_valid = False
+                        continue
+                    text = str(page.get("text") or "")
+                    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+                    start = marker.get("canonical_start_char")
+                    end = marker.get("canonical_end_char_exclusive")
+                    marker_range_semantics_valid = (
+                        marker.get("character_range_semantics")
+                        == "page_unicode_codepoints_end_exclusive"
+                    )
+                    range_valid = start is None and end is None and marker.get("exact_text") is None
+                    if isinstance(start, int) and isinstance(end, int):
+                        range_valid = 0 <= start <= end <= len(text) and text[start:end] == marker.get(
+                            "exact_text"
+                        )
+                    auto_verified = marker.get("review_status") == "AUTO_VERIFIED"
+                    statuses_valid = (
+                        marker.get("review_status")
+                        in {"AUTO_VERIFIED", "NEEDS_REVIEW"}
+                        and marker.get("position_status")
+                        in {"VERIFIED", "NEEDS_REVIEW"}
+                        and marker.get("text_accuracy_status")
+                        in {"VERIFIED", "NEEDS_REVIEW"}
+                    )
+                    reference_source_valid = (
+                        reference.get("field") == "canonical_text"
+                        and reference.get("source") == page.get("source")
+                    )
+                    auto_verified_consistent = (
+                        not auto_verified
+                        or (
+                            isinstance(start, int)
+                            and isinstance(end, int)
+                            and start < end
+                            and isinstance(marker.get("exact_text"), str)
+                            and bool(marker.get("exact_text"))
+                            and range_valid
+                            and marker.get("position_status") == "VERIFIED"
+                            and marker.get("text_accuracy_status") == "VERIFIED"
+                            and page.get("source") == "reconciled_text"
+                        )
+                    )
+                    expected_evidence = (
+                        f"review/page-{int(marker['page_number']):04d}-review.png"
+                    )
+                    marker_refs_valid = marker_refs_valid and (
+                        digest == page.get("text_sha256") == reference.get("text_sha256")
+                        and int(reference.get("page_number", -1)) == int(marker["page_number"])
+                        and reference_source_valid
+                        and range_semantics_valid
+                        and marker_range_semantics_valid
+                        and statuses_valid
+                        and range_valid
+                        and auto_verified_consistent
+                        and (
+                            auto_verified
+                            or marker.get("evidence_image") == expected_evidence
+                        )
+                    )
             checks = {
                 "paths_safe": safe,
                 "paths_unique": unique,
@@ -123,13 +265,22 @@ def validate_chat_packet_structure(packet: Path) -> dict[str, Any]:
                     "marker_index.json",
                     "CHAT_INSTRUCTIONS.md",
                 }.issubset(names),
+                "packet_schema_supported": supported_packet_schema,
+                "marker_schema_matches_manifest": marker_schema_consistent,
+                "range_semantics_valid_for_v2": range_semantics_valid,
+                "page_text_present_for_v2": not marker_schema_v2 or page_text_present,
+                "page_text_schema_valid_for_v2": page_text_schema_valid,
+                "page_text_entries_valid_for_v2": not marker_schema_v2 or page_text_entries_valid,
+                "page_text_pages_match_manifest": page_text_pages_match_manifest,
+                "page_text_hashes_valid": page_text_hashes_valid,
+                "marker_count_matches_manifest": marker_count_matches_manifest,
                 "review_pages_match_manifest": expected_reviews
                 == {name for name in names if name.startswith("review/")},
                 "handoff_pages_match_manifest": all(
                     f"## PDF page {page}" in handoff for page in requested
                 ),
-                "review_count_matches": manifest.get("review_sheet_count")
-                == len(expected_reviews),
+                "review_count_matches": manifest.get("review_sheet_count") == len(expected_reviews),
+                "marker_text_references_valid": marker_refs_valid,
             }
     except (KeyError, OSError, UnicodeDecodeError, zipfile.BadZipFile) as exc:
         raise RuntimeError(f"Chat packet structural validation failed: {target}") from exc

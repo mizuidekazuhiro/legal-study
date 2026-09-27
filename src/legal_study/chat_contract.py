@@ -42,7 +42,7 @@ def build_bridge_command(
     This is a local reference implementation, not a ChatGPT API call or a file
     writer. The caller must hash the bytes actually stored in 10_approved.
     """
-    if packet_manifest.get("schema_version") != "chat_packet.v1":
+    if packet_manifest.get("schema_version") not in {"chat_packet.v1", "chat_packet.v2"}:
         raise ValueError("Unsupported packet manifest schema_version")
     contract = packet_manifest.get("chat_contract") or {}
     if contract.get("schema_version") != "chat_bridge_contract.v1":

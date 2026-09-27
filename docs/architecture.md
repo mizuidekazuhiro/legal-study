@@ -124,5 +124,18 @@ proves overlap or adjacency without an unmarked character gap. Every logical mar
 its constituent marker IDs and raw vector IDs. Surgical OCR remains reconciliation evidence;
 only full-page and image-region OCR can appear in OCR Supplements.
 
+Canonical packet schema v4 gives each page one `canonical_text`, its SHA-256, and the
+source used by the handoff (`reconciled_text` or `independent_full_page_ocr`). Marker
+ranges into that text use page-local Unicode code-point offsets with an end-exclusive
+boundary; the invariant is `canonical_text[start:end] == exact_text`. Legacy native
+character indexes remain raw evidence and are not reinterpreted as OCR offsets. When
+line-only OCR geometry cannot prove a partial-character boundary, the range stays unset
+and the marker remains `NEEDS_REVIEW`; its review sheet contains localized marker crops.
+
+Chat packet v2 carries this compact mapping in `page_text.json` and
+`marker_index.v2`. Closing and reopening the ZIP validates text hashes, ranges, evidence
+paths, CRCs, and requested-page references. Canonical schema v3 runs still export the
+readable v1 marker shape and are never silently promoted to v2 verified evidence.
+
 Anki, Obsidian, Notion, and Google Drive automation are intentionally outside the
 current scope. The packet is designed for manual upload to a ChatGPT Project.
