@@ -528,3 +528,60 @@ def test_all_pages_run_requires_manifest_page_count(tmp_path: Path) -> None:
         RuntimeError, match="all-pages Chat packet requires a positive manifest page_count"
     ):
         build_chat_packet(run_dir=run)
+
+
+
+def test_v2_packet_rejects_auto_verified_marker_without_verified_range(
+    tmp_path: Path,
+) -> None:
+    run = _run(tmp_path)
+    canonical_path = run / "canonical_source.json"
+    canonical = json.loads(canonical_path.read_text(encoding="utf-8"))
+    text = "境界未確定の本文"
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    canonical["schema_version"] = 4
+    canonical["pages"] = [
+        {
+            "page_number": 109,
+            "canonical_text": text,
+            "canonical_text_sha256": digest,
+            "canonical_text_source": "reconciled_text",
+        }
+    ]
+    marker = canonical["logical_markers"][0]
+    marker.update(
+        {
+            "exact_text": None,
+            "canonical_start_char": None,
+            "canonical_end_char_exclusive": None,
+            "character_range_semantics": "page_unicode_codepoints_end_exclusive",
+            "text_reference": {
+                "page_number": 109,
+                "field": "canonical_text",
+                "text_sha256": digest,
+                "source": "reconciled_text",
+            },
+            "position_status": "NEEDS_REVIEW",
+            "text_accuracy_status": "NEEDS_REVIEW",
+            "review_status": "NEEDS_REVIEW",
+        }
+    )
+    canonical_path.write_text(json.dumps(canonical, ensure_ascii=False), encoding="utf-8")
+
+    result = build_chat_packet(run_dir=run)
+    packet = Path(result.packet_path)
+    tampered = tmp_path / "auto-verified-without-range.zip"
+
+    with zipfile.ZipFile(packet) as source, zipfile.ZipFile(
+        tampered, "w", compression=zipfile.ZIP_DEFLATED
+    ) as target:
+        for name in source.namelist():
+            payload = source.read(name)
+            if name == "marker_index.json":
+                marker_payload = json.loads(payload)
+                marker_payload["logical_markers"][0]["review_status"] = "AUTO_VERIFIED"
+                payload = json.dumps(marker_payload, ensure_ascii=False).encode("utf-8")
+            target.writestr(name, payload)
+
+    with pytest.raises(RuntimeError, match="structural validation failed"):
+        validate_chat_packet_structure(tampered)

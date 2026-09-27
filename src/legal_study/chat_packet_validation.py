@@ -202,12 +202,27 @@ def validate_chat_packet_structure(packet: Path) -> dict[str, Any]:
                         range_valid = 0 <= start <= end <= len(text) and text[start:end] == marker.get(
                             "exact_text"
                         )
+                    auto_verified = marker.get("review_status") == "AUTO_VERIFIED"
+                    auto_verified_consistent = (
+                        not auto_verified
+                        or (
+                            isinstance(start, int)
+                            and isinstance(end, int)
+                            and start < end
+                            and isinstance(marker.get("exact_text"), str)
+                            and bool(marker.get("exact_text"))
+                            and range_valid
+                            and marker.get("position_status") == "VERIFIED"
+                            and marker.get("text_accuracy_status") == "VERIFIED"
+                        )
+                    )
                     marker_refs_valid = marker_refs_valid and (
                         digest == page.get("text_sha256") == reference.get("text_sha256")
                         and int(reference.get("page_number", -1)) == int(marker["page_number"])
                         and range_valid
+                        and auto_verified_consistent
                         and (
-                            marker.get("review_status") == "AUTO_VERIFIED"
+                            auto_verified
                             or marker.get("evidence_image") in names
                         )
                     )
