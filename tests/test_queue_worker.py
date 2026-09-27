@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 
@@ -47,9 +48,6 @@ class PacketReadyPipeline(FakePipeline):
         (root / "canonical_source.json").write_text(
             json.dumps(canonical), encoding="utf-8"
         )
-        (root / "problem_validation.json").write_text(
-            json.dumps({"valid": self.valid}), encoding="utf-8"
-        )
         handoff = handoff_markdown_filename(
             prepared.manifest.subject, prepared.manifest.question
         )
@@ -66,6 +64,20 @@ class PacketReadyPipeline(FakePipeline):
         review.mkdir()
         for page in selected:
             (review / f"page-{page:04d}-review.png").write_bytes(b"png")
+        (root / "problem_validation.json").write_text(
+            json.dumps(
+                {
+                    "valid": self.valid,
+                    "canonical_sha256": hashlib.sha256(
+                        (root / "canonical_source.json").read_bytes()
+                    ).hexdigest(),
+                    "handoff_markdown_sha256": hashlib.sha256(
+                        (root / handoff).read_bytes()
+                    ).hexdigest(),
+                }
+            ),
+            encoding="utf-8",
+        )
 
 
 def _write_pdf(path: Path) -> None:

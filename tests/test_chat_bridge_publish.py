@@ -1,3 +1,4 @@
+import hashlib
 import json
 import zipfile
 from pathlib import Path
@@ -56,10 +57,6 @@ def _write_run(root: Path) -> Path:
         json.dumps(canonical, ensure_ascii=False),
         encoding="utf-8",
     )
-    (run / "problem_validation.json").write_text(
-        json.dumps({"valid": True}),
-        encoding="utf-8",
-    )
     (run / "criminal_16_handoff.md").write_text(
         "# Page Reading Pack\n\n## PDF page 200\n\n"
         "第16問\n16-1\n次の事例について甲の罪責を論ぜよ。\n"
@@ -67,6 +64,20 @@ def _write_run(root: Path) -> Path:
         encoding="utf-8",
     )
     (run / "handoff_review/page-0200-review.png").write_bytes(b"png")
+    (run / "problem_validation.json").write_text(
+        json.dumps(
+            {
+                "valid": True,
+                "canonical_sha256": hashlib.sha256(
+                    (run / "canonical_source.json").read_bytes()
+                ).hexdigest(),
+                "handoff_markdown_sha256": hashlib.sha256(
+                    (run / "criminal_16_handoff.md").read_bytes()
+                ).hexdigest(),
+            }
+        ),
+        encoding="utf-8",
+    )
     return run
 
 
@@ -155,6 +166,12 @@ def test_existing_packet_with_different_content_is_not_accepted(tmp_path: Path) 
         "答案例\n変更後の講師答案本文\n以上\n",
         encoding="utf-8",
     )
+    validation_path = run / "problem_validation.json"
+    validation = json.loads(validation_path.read_text(encoding="utf-8"))
+    validation["handoff_markdown_sha256"] = hashlib.sha256(
+        (run / "criminal_16_handoff.md").read_bytes()
+    ).hexdigest()
+    validation_path.write_text(json.dumps(validation), encoding="utf-8")
 
     with pytest.raises(RuntimeError, match="different"):
         publish_run_to_bridge(run_dir=run, bridge_root=bridge)
