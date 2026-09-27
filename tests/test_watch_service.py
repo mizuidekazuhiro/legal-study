@@ -56,11 +56,15 @@ def test_cli_duplicate_stops_before_processing(tmp_path, monkeypatch, kind, comm
 def test_process_lock_excludes_duplicates_and_releases_after_exit(tmp_path):
     lock = WatchLock(tmp_path, "study", tmp_path / "input.pdf")
     code = "from pathlib import Path; from legal_study.automation.watch_lock import WatchLock; WatchLock(Path(__import__('sys').argv[1]),'study',Path(__import__('sys').argv[1])/'input.pdf')"
-    denied = subprocess.run([sys.executable, "-c", code, str(tmp_path)], capture_output=True)
+    denied = subprocess.run(
+        [sys.executable, "-c", code, str(tmp_path)], capture_output=True, check=False
+    )
     assert denied.returncode != 0
     assert b"already running" in denied.stderr
     lock.close()
-    allowed = subprocess.run([sys.executable, "-c", code, str(tmp_path)], capture_output=True)
+    allowed = subprocess.run(
+        [sys.executable, "-c", code, str(tmp_path)], capture_output=True, check=False
+    )
     assert allowed.returncode == 0, allowed.stderr
 
 
@@ -143,14 +147,14 @@ def test_service_does_not_parse_existing_pdf_and_stops_cleanly(tmp_path):
         assert state["children"] == {}
         assert not state["study_started"]
         assert not (tmp_path / "home" / "state.sqlite3").exists()
-        assert subprocess.run(command, timeout=10).returncode == 0
+        assert subprocess.run(command, timeout=10, check=False).returncode == 0
         assert read_heartbeat(state_path)["pid"] == state["pid"]
-        assert subprocess.run(command + ["--stop"], timeout=10).returncode == 0
+        assert subprocess.run(command + ["--stop"], timeout=10, check=False).returncode == 0
         assert proc.wait(timeout=10) == 0
         assert read_heartbeat(state_path)["status"] == "stopped"
     finally:
         if proc.poll() is None:
-            subprocess.run(command + ["--stop"], timeout=10)
+            subprocess.run(command + ["--stop"], timeout=10, check=False)
             proc.wait(timeout=10)
         proc.stderr.close()
 
@@ -207,7 +211,7 @@ def test_service_restarts_bridge_child_after_abnormal_exit(tmp_path):
         assert proc.poll() is None
         assert replacement_pid and replacement_pid != first_pid
     finally:
-        subprocess.run(command + ["--stop"], timeout=10)
+        subprocess.run(command + ["--stop"], timeout=10, check=False)
         if proc.poll() is None:
             proc.wait(timeout=10)
         proc.stderr.close()
