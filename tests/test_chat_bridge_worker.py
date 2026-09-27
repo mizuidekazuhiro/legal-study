@@ -4,7 +4,11 @@ from pathlib import Path
 import pytest
 
 import legal_study.chat_bridge_worker as bridge_worker
-from legal_study.chat_bridge_worker import BridgeCommand, process_bridge_command
+from legal_study.chat_bridge_worker import (
+    BridgeCommand,
+    process_bridge_command,
+    watch_bridge_commands,
+)
 from legal_study.io_utils import file_sha256
 from legal_study.settings import LocalSettings
 
@@ -414,3 +418,26 @@ def test_invalid_result_fails_before_any_external_action(
     assert receipt["status"] == "failed"
     assert "UNRESOLVED_ITEMS_REMAIN" in receipt["error"]
     assert calls == {"obsidian": 0, "notion": 0}
+
+
+def test_watcher_isolates_malformed_command(tmp_path: Path, monkeypatch) -> None:
+    settings = LocalSettings(home=tmp_path / "home")
+    bridge = tmp_path / "bridge"
+    for name in ("10_approved", "20_commands", "30_receipts", "99_failed"):
+        (bridge / name).mkdir(parents=True)
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    (bridge / "20_commands" / "broken.json").write_text("{", encoding="utf-8")
+    monkeypatch.setattr(bridge_worker.time, "sleep", lambda _seconds: None)
+    watcher = watch_bridge_commands(
+        bridge_root=bridge,
+        obsidian_inbox=inbox,
+        settings=settings,
+        poll_interval_seconds=0.01,
+        stable_seconds=0,
+    )
+
+    result = next(watcher)
+
+    assert result.status == "INVALID_COMMAND"
+    assert Path(result.receipt_path or "").is_file()

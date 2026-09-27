@@ -520,13 +520,37 @@ def watch_bridge_commands(
                 continue
 
             registrar = None
-            if notion_registrar_factory is not None:
-                preview = BridgeCommand.model_validate_json(path.read_text(encoding="utf-8"))
-                if preview.action in {
-                    BridgeAction.REGISTER_NOTION,
-                    BridgeAction.APPLY_ALL,
-                }:
-                    registrar = notion_registrar_factory()
+            try:
+                preview = BridgeCommand.model_validate_json(
+                    path.read_text(encoding="utf-8")
+                )
+            except Exception as exc:  # noqa: BLE001 -- isolate malformed commands
+                command_sha = file_sha256(path)
+                failed_path = layout.failed / f"invalid-{command_sha[:16]}.receipt.json"
+                atomic_write_json(
+                    failed_path,
+                    {
+                        "schema_version": "chat_bridge_invalid_command.v1",
+                        "status": "failed",
+                        "command_file": path.name,
+                        "command_sha256": command_sha,
+                        "processed_at": datetime.now(UTC).isoformat(),
+                        "error": repr(exc),
+                    },
+                )
+                yield BridgeWorkerResult(
+                    processed=True,
+                    status="INVALID_COMMAND",
+                    receipt_path=str(failed_path),
+                    error=repr(exc),
+                )
+                observations[path] = (signature[0], signature[1], now + 10**9)
+                continue
+            if notion_registrar_factory is not None and preview.action in {
+                BridgeAction.REGISTER_NOTION,
+                BridgeAction.APPLY_ALL,
+            }:
+                registrar = notion_registrar_factory()
 
             yield process_bridge_command(
                 command_path=path,

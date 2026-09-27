@@ -33,6 +33,7 @@ class NotionPreflight(StrictNotionModel):
     card_count: int
     duplicate_names: list[str] = Field(default_factory=list)
     invalid_options: list[str] = Field(default_factory=list)
+    resumable_page_ids: dict[str, str] = Field(default_factory=dict)
 
 
 class NotionCardReceipt(StrictNotionModel):
@@ -116,9 +117,19 @@ class LegalQuestionBankRegistrar:
                 + "; ".join(preflight.invalid_options)
             )
 
-        created: list[NotionCardReceipt] = []
+        completed: list[NotionCardReceipt] = []
         for raw in cards:
             card = chat_result.ChatAnkiCard.model_validate(raw)
+            existing_page_id = preflight.resumable_page_ids.get(card.name)
+            if existing_page_id is not None:
+                completed.append(
+                    NotionCardReceipt(
+                        name=card.name,
+                        page_id=existing_page_id,
+                        verified=True,
+                    )
+                )
+                continue
             properties = self._properties(card)
             page = client.pages.create(
                 parent={"data_source_id": self.data_source_id},
@@ -127,7 +138,7 @@ class LegalQuestionBankRegistrar:
             page_id = str(page["id"])
             fetched = client.pages.retrieve(page_id=page_id)
             self._verify_page(fetched, card)
-            created.append(
+            completed.append(
                 NotionCardReceipt(
                     name=card.name,
                     page_id=page_id,
@@ -138,8 +149,8 @@ class LegalQuestionBankRegistrar:
 
         return chat_bridge_worker.NotionRegistrationResult(
             status="REGISTERED_AND_VERIFIED",
-            created=len(created),
-            verified=sum(1 for item in created if item.verified),
+            created=len(completed),
+            verified=sum(1 for item in completed if item.verified),
         )
 
     def _preflight(
@@ -171,6 +182,7 @@ class LegalQuestionBankRegistrar:
                     )
 
         duplicate_names: list[str] = []
+        resumable_page_ids: dict[str, str] = {}
         for raw in cards:
             card = chat_result.ChatAnkiCard.model_validate(raw)
             response = client.data_sources.query(
@@ -181,7 +193,16 @@ class LegalQuestionBankRegistrar:
                 },
                 page_size=2,
             )
-            if response.get("results"):
+            results = response.get("results") or []
+            if len(results) == 1:
+                page_id = str(results[0]["id"])
+                try:
+                    self._verify_page(client.pages.retrieve(page_id=page_id), card)
+                except RuntimeError:
+                    duplicate_names.append(card.name)
+                else:
+                    resumable_page_ids[card.name] = page_id
+            elif results:
                 duplicate_names.append(card.name)
 
         return NotionPreflight(
@@ -189,6 +210,7 @@ class LegalQuestionBankRegistrar:
             card_count=len(cards),
             duplicate_names=sorted(set(duplicate_names)),
             invalid_options=invalid_options,
+            resumable_page_ids=resumable_page_ids,
         )
 
     def _properties(self, card: chat_result.ChatAnkiCard) -> dict[str, Any]:

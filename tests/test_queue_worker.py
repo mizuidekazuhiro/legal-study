@@ -146,7 +146,7 @@ def test_worker_failure_returns_question_to_sync_stable(tmp_path: Path) -> None:
 
     assert result.claimed is True
     assert result.reason == "INGEST_FAILED"
-    assert result.queue_status == WorkStatus.FAILED
+    assert result.queue_status == WorkStatus.PENDING
     assert result.question_status == QuestionStatus.SYNC_STABLE
     assert "pipeline boom" in (result.error or "")
 
@@ -156,7 +156,7 @@ def test_worker_failure_returns_question_to_sync_stable(tmp_path: Path) -> None:
 
     item = queue.get_work_item(result.work_item_id or -1)
     assert item is not None
-    assert item.status == WorkStatus.FAILED
+    assert item.status == WorkStatus.PENDING
 
 
 def test_worker_resumes_question_left_processing_after_crash(tmp_path: Path) -> None:
@@ -241,9 +241,9 @@ def test_worker_does_not_complete_when_publish_fails(tmp_path: Path) -> None:
         pipeline=PacketReadyPipeline(), settings=settings, bridge_root=bridge
     )
 
-    assert result.queue_status == WorkStatus.FAILED
+    assert result.queue_status == WorkStatus.PENDING
     assert result.chat_packet_status is None
-    assert queue.get_work_item(result.work_item_id or -1).status == WorkStatus.FAILED
+    assert queue.get_work_item(result.work_item_id or -1).status == WorkStatus.PENDING
     assert questions.get("criminal", "22").status == QuestionStatus.SYNC_STABLE
     assert not (bridge / "00_pending").exists()
 
@@ -260,6 +260,6 @@ def test_worker_does_not_publish_invalid_run(tmp_path: Path) -> None:
         bridge_root=bridge,
     )
 
-    assert result.queue_status == WorkStatus.FAILED
-    assert queue.get_work_item(result.work_item_id or -1).status == WorkStatus.FAILED
+    assert result.queue_status == WorkStatus.PENDING
+    assert queue.get_work_item(result.work_item_id or -1).status == WorkStatus.PENDING
     assert list(pending.iterdir()) == []

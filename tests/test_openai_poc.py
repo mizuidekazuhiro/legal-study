@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from legal_study import openai_poc
 from legal_study.openai_poc import (
     OpenAIPocConfig,
     build_study_draft_bundle_from_run,
@@ -289,6 +290,22 @@ def test_one_question_poc_calls_responses_once_and_accepts_candidate(tmp_path: P
     assert receipt["raw_response_path"] == "study_draft_api_raw_response.json"
     assert receipt["acceptance_issues"] == []
     assert (run_dir / "study_draft_api_raw_response.json").is_file()
+
+
+def test_client_initialization_failure_does_not_reserve_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_dir, bundle = _bundle(tmp_path)
+
+    def fail_client() -> None:
+        raise RuntimeError("client initialization failed")
+
+    monkeypatch.setattr(openai_poc, "_default_openai_client", fail_client)
+
+    with pytest.raises(RuntimeError, match="client initialization failed"):
+        run_openai_study_draft_poc(bundle=bundle, run_dir=run_dir)
+
+    assert not (run_dir / "study_draft_api_receipt.json").exists()
 
 
 def test_incomplete_response_is_rejected_without_study_draft(tmp_path: Path) -> None:

@@ -166,6 +166,7 @@ def run_openai_study_draft_poc(
         }
     )
     request_hash = _request_sha256(request_payload)
+    api_client = client if client is not None else _default_openai_client()
 
     started_at = datetime.now(UTC).isoformat()
     atomic_write_json(
@@ -185,8 +186,6 @@ def run_openai_study_draft_poc(
             "reason": "CALLING",
         },
     )
-
-    api_client = client if client is not None else _default_openai_client()
 
     try:
         response = api_client.responses.create(**request_payload)

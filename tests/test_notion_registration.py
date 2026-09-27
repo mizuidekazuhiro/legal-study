@@ -85,6 +85,11 @@ class FakeClient:
     def __init__(self, *, duplicate: bool = False) -> None:
         self.data_sources = FakeDataSources(duplicate=duplicate)
         self.pages = FakePages()
+        if duplicate:
+            self.pages.by_id["existing"] = {
+                "id": "existing",
+                "properties": {},
+            }
 
 
 def _write_run_and_result(tmp_path: Path) -> tuple[Path, Path]:
@@ -199,3 +204,33 @@ def test_duplicate_name_aborts_before_any_create(tmp_path: Path) -> None:
         registrar.register(result_path=result_path, run_dir=run)
 
     assert client.pages.created == []
+
+
+def test_exact_existing_card_is_resumed_without_duplicate_create(tmp_path: Path) -> None:
+    run, result_path = _write_run_and_result(tmp_path)
+    client = FakeClient()
+    registrar = LegalQuestionBankRegistrar(
+        token="test-token",
+        client_factory=lambda _token: client,
+    )
+    first = registrar.register(result_path=result_path, run_dir=run)
+    assert first.created == 1
+
+    class ExistingDataSources(FakeDataSources):
+        def query(self, *, data_source_id: str, **kwargs: Any) -> dict[str, Any]:
+            assert data_source_id
+            expected_name = kwargs["filter"]["title"]["equals"]
+            matches = []
+            for page_id, page in client.pages.by_id.items():
+                title = page["properties"]["Name"]["title"]
+                if title[0]["plain_text"] == expected_name:
+                    matches.append({"id": page_id})
+            return {"results": matches}
+
+    client.data_sources = ExistingDataSources()
+    second = registrar.register(result_path=result_path, run_dir=run)
+
+    assert second.status == "REGISTERED_AND_VERIFIED"
+    assert second.created == 1
+    assert second.verified == 1
+    assert len(client.pages.created) == 1

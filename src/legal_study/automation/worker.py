@@ -94,6 +94,7 @@ def process_next_work_item(
         reason="CLAIMED",
     )
 
+    retryable_failure = False
     try:
         if item.source_snapshot is None:
             raise RuntimeError("Queued work item is missing immutable source snapshot")
@@ -138,6 +139,7 @@ def process_next_work_item(
             pipeline_config=pipeline.input_config(),
             settings=cfg,
         )
+        retryable_failure = True
         pipeline.run(
             item.source_snapshot,
             prepared,
@@ -178,7 +180,11 @@ def process_next_work_item(
         elif current is not None:
             result.question_status = current.status
 
-        failed = queue.mark_failed(item.id, repr(exc))
+        failed = (
+            queue.mark_retryable(item.id, repr(exc))
+            if retryable_failure
+            else queue.mark_failed(item.id, repr(exc))
+        )
         result.queue_status = failed.status
         result.reason = "INGEST_FAILED"
         result.error = repr(exc)
@@ -202,4 +208,6 @@ def drain_pending_work(
         if not result.claimed:
             break
         results.append(result)
+        if result.reason == "INGEST_FAILED":
+            break
     return results

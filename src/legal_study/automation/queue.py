@@ -326,6 +326,10 @@ class AutomationStateStore:
     def mark_failed(self, item_id: int, error: str) -> WorkItem:
         return self._set_terminal(item_id, WorkStatus.FAILED, error)
 
+    def mark_retryable(self, item_id: int, error: str) -> WorkItem:
+        """Return a claimed item to PENDING while retaining failure evidence."""
+        return self._set_terminal(item_id, WorkStatus.PENDING, error)
+
     def _set_terminal(
         self,
         item_id: int,
