@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import hashlib
+import shutil
 import sqlite3
+import tempfile
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -417,6 +420,7 @@ def process_bridge_command(
                 receipt_path=str(receipt_path),
             )
 
+    verified_dir: Path | None = None
     try:
         begin_state = state.begin(command.command_id, command_sha)
     except RuntimeError as exc:
@@ -454,9 +458,14 @@ def process_bridge_command(
             raise ValueError("Approved result must remain in 10_approved")
         if not result_path.is_file():
             raise FileNotFoundError(f"Approved result is missing: {result_path}")
-        actual_result_sha = file_sha256(result_path)
+        approved_bytes = result_path.read_bytes()
+        actual_result_sha = hashlib.sha256(approved_bytes).hexdigest()
         if actual_result_sha != command.result_sha256:
             raise RuntimeError("Approved result SHA does not match command")
+        cfg.temp_dir.mkdir(parents=True, exist_ok=True)
+        verified_dir = Path(tempfile.mkdtemp(prefix="bridge-result-", dir=cfg.temp_dir))
+        verified_result_path = verified_dir / result_path.name
+        verified_result_path.write_bytes(approved_bytes)
 
         run_dir = resolve_run_dir(
             runs_dir=cfg.runs_dir,
@@ -467,7 +476,7 @@ def process_bridge_command(
         )
         validation_scope = "obsidian" if command.action == BridgeAction.APPLY_OBSIDIAN else "full"
         validation = validate_chat_result(
-            result_path=result_path,
+            result_path=verified_result_path,
             run_dir=run_dir,
             validation_scope=validation_scope,
             expected_run_id=command.run_id,
@@ -483,7 +492,7 @@ def process_bridge_command(
 
         if command.action in {BridgeAction.APPLY_OBSIDIAN, BridgeAction.APPLY_ALL}:
             apply_report = apply_chat_result(
-                result_path=result_path,
+                result_path=verified_result_path,
                 run_dir=run_dir,
                 obsidian_inbox=obsidian_inbox,
                 update_existing=True,
@@ -501,7 +510,7 @@ def process_bridge_command(
                     "is configured on this PC"
                 )
             notion = notion_registrar.register(
-                result_path=result_path,
+                result_path=verified_result_path,
                 run_dir=run_dir,
             )
             notion_status = notion.status
@@ -558,6 +567,9 @@ def process_bridge_command(
             receipt_path=str(failed_path),
             error=repr(exc),
         )
+    finally:
+        if verified_dir is not None:
+            shutil.rmtree(verified_dir, ignore_errors=True)
 
 
 def watch_bridge_commands(

@@ -59,17 +59,21 @@ def build_chat_packet(
     if validation.get("valid") is not True:
         raise RuntimeError("problem_validation.json is not valid; refusing to build Chat packet")
 
+    handoff_name = handoff_markdown_filename(manifest.subject, manifest.question)
+    handoff_path = root / handoff_name
+    if not handoff_path.is_file():
+        raise FileNotFoundError(f"Handoff Markdown is missing: {handoff_path}")
+    if validation.get("canonical_sha256") != file_sha256(canonical_path):
+        raise RuntimeError("canonical_source.json changed after problem validation")
+    if validation.get("handoff_markdown_sha256") != file_sha256(handoff_path):
+        raise RuntimeError("Handoff Markdown changed after problem validation")
+
     canonical = json.loads(canonical_path.read_text(encoding="utf-8"))
     source = canonical.get("source") or {}
     if source.get("sha256") != manifest.source.sha256:
         raise RuntimeError("canonical source SHA does not match run manifest")
     if source.get("requested_pages") != manifest.requested_pages:
         raise RuntimeError("canonical requested_pages do not match run manifest")
-
-    handoff_name = handoff_markdown_filename(manifest.subject, manifest.question)
-    handoff_path = root / handoff_name
-    if not handoff_path.is_file():
-        raise FileNotFoundError(f"Handoff Markdown is missing: {handoff_path}")
 
     marker_index = [_compact_marker(item) for item in (canonical.get("logical_markers") or [])]
     marker_schema_v2 = int(canonical.get("schema_version", 0)) >= 4

@@ -69,6 +69,33 @@ def test_wait_for_sync_stable_times_out_before_candidate(tmp_path: Path) -> None
     assert result.sha256 is None
 
 
+def test_wait_for_sync_stable_handles_source_disappearing_mid_observation(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.pdf"
+    source.write_bytes(b"source")
+    calls = 0
+
+    def disappearing_observation(path: Path) -> FileObservation:
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            raise FileNotFoundError(path)
+        return FileObservation(size=6, mtime_ns=1)
+
+    result = wait_for_sync_stable(
+        source,
+        interval_seconds=0,
+        required_equal_observations=2,
+        timeout_seconds=1,
+        observation_fn=disappearing_observation,
+        sleep_fn=lambda _: None,
+    )
+
+    assert result.stable is False
+    assert result.reason == "SOURCE_MISSING_DURING_SYNC"
+
+
 def test_mark_question_sync_stable_advances_matching_done_source(tmp_path: Path) -> None:
     source = tmp_path / "source.pdf"
     source.write_bytes(b"stable source")

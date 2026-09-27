@@ -73,7 +73,15 @@ def wait_for_sync_stable(
     previous: FileObservation | None = None
 
     while True:
-        current = observation_fn(target)
+        try:
+            current = observation_fn(target)
+        except OSError:
+            return SyncStabilityResult(
+                stable=False,
+                path=str(target),
+                observations=observations,
+                reason="SOURCE_MISSING_DURING_SYNC",
+            )
         observations.append(current)
         if previous is not None and current == previous:
             equal_count += 1
@@ -82,19 +90,43 @@ def wait_for_sync_stable(
         previous = current
 
         if equal_count >= required_equal_observations:
-            first_hash = hash_fn(target)
-            before_verify = observation_fn(target)
+            try:
+                first_hash = hash_fn(target)
+                before_verify = observation_fn(target)
+            except OSError:
+                return SyncStabilityResult(
+                    stable=False,
+                    path=str(target),
+                    observations=observations,
+                    reason="SOURCE_MISSING_DURING_SYNC",
+                )
             if before_verify != current:
                 observations.append(before_verify)
                 previous = before_verify
                 equal_count = 1
             else:
                 sleep_fn(interval_seconds)
-                after_verify = observation_fn(target)
+                try:
+                    after_verify = observation_fn(target)
+                except OSError:
+                    return SyncStabilityResult(
+                        stable=False,
+                        path=str(target),
+                        observations=observations,
+                        reason="SOURCE_MISSING_DURING_SYNC",
+                    )
                 observations.append(after_verify)
                 if after_verify == before_verify:
-                    second_hash = hash_fn(target)
-                    final_observation = observation_fn(target)
+                    try:
+                        second_hash = hash_fn(target)
+                        final_observation = observation_fn(target)
+                    except OSError:
+                        return SyncStabilityResult(
+                            stable=False,
+                            path=str(target),
+                            observations=observations,
+                            reason="SOURCE_MISSING_DURING_SYNC",
+                        )
                     if final_observation != after_verify:
                         observations.append(final_observation)
                         previous = final_observation

@@ -78,10 +78,6 @@ def _run(tmp_path: Path) -> Path:
         json.dumps(canonical, ensure_ascii=False),
         encoding="utf-8",
     )
-    (run / "problem_validation.json").write_text(
-        json.dumps({"valid": True}),
-        encoding="utf-8",
-    )
     (run / "criminal_12_handoff.md").write_text(
         "# Page Reading Pack\n\n## PDF page 109\n\n"
         "第12問\n12-1\n次の事例について甲の罪責を論ぜよ。\n"
@@ -129,7 +125,23 @@ def _run(tmp_path: Path) -> Path:
         json.dumps(supplemental, ensure_ascii=False),
         encoding="utf-8",
     )
+    _refresh_validation(run)
     return run
+
+
+def _refresh_validation(run: Path) -> None:
+    canonical = run / "canonical_source.json"
+    handoff = run / "criminal_12_handoff.md"
+    (run / "problem_validation.json").write_text(
+        json.dumps(
+            {
+                "valid": True,
+                "canonical_sha256": hashlib.sha256(canonical.read_bytes()).hexdigest(),
+                "handoff_markdown_sha256": hashlib.sha256(handoff.read_bytes()).hexdigest(),
+            }
+        ),
+        encoding="utf-8",
+    )
 
 
 def test_material_validation_does_not_confuse_page_1_with_page_10(
@@ -156,6 +168,7 @@ def test_material_validation_does_not_confuse_page_1_with_page_10(
 def test_build_chat_packet_is_compact_and_project_instruction_free(tmp_path: Path) -> None:
     run = _run(tmp_path)
 
+    _refresh_validation(run)
     result = build_chat_packet(run_dir=run)
 
     packet = Path(result.packet_path)
@@ -251,6 +264,19 @@ def test_invalid_problem_packet_is_not_exported(tmp_path: Path) -> None:
         build_chat_packet(run_dir=run)
 
 
+@pytest.mark.parametrize("artifact", ["canonical_source.json", "criminal_12_handoff.md"])
+def test_packet_rejects_artifact_changed_after_problem_validation(
+    tmp_path: Path,
+    artifact: str,
+) -> None:
+    run = _run(tmp_path)
+    path = run / artifact
+    path.write_bytes(path.read_bytes() + b"changed")
+
+    with pytest.raises(RuntimeError, match="changed after problem validation"):
+        build_chat_packet(run_dir=run)
+
+
 @pytest.mark.parametrize(
     ("subject", "deck"),
     [
@@ -311,6 +337,7 @@ def _upgrade_run_to_v2(run: Path) -> tuple[str, str]:
         }
     )
     canonical_path.write_text(json.dumps(canonical, ensure_ascii=False), encoding="utf-8")
+    _refresh_validation(run)
     return text, digest
 
 
@@ -387,6 +414,8 @@ def test_v2_packet_preserves_intentionally_empty_canonical_text(tmp_path: Path) 
     canonical["logical_markers"] = []
     canonical_path.write_text(json.dumps(canonical, ensure_ascii=False), encoding="utf-8")
 
+    _refresh_validation(run)
+
     result = build_chat_packet(run_dir=run)
 
     assert validate_chat_packet_structure(Path(result.packet_path))["valid"] is True
@@ -417,6 +446,7 @@ def test_v2_packet_validates_every_requested_page_text_without_markers(
     ]
     canonical["logical_markers"] = []
     canonical_path.write_text(json.dumps(canonical, ensure_ascii=False), encoding="utf-8")
+    _refresh_validation(run)
     result = build_chat_packet(run_dir=run)
     packet = Path(result.packet_path)
     tampered = tmp_path / f"page-text-{tamper_kind}.zip"
@@ -502,6 +532,8 @@ def test_all_pages_run_materializes_effective_requested_pages(tmp_path: Path) ->
         encoding="utf-8",
     )
 
+    _refresh_validation(run)
+
     result = build_chat_packet(run_dir=run)
 
     assert result.requested_pages == [1]
@@ -537,6 +569,7 @@ def test_all_pages_run_rejects_incomplete_canonical_page_set(tmp_path: Path) -> 
     ]
     canonical["logical_markers"] = []
     canonical_path.write_text(json.dumps(canonical, ensure_ascii=False), encoding="utf-8")
+    _refresh_validation(run)
 
     with pytest.raises(
         RuntimeError, match="canonical pages do not match the effective requested page set"
@@ -559,6 +592,7 @@ def test_all_pages_run_requires_manifest_page_count(tmp_path: Path) -> None:
     canonical["pages"] = []
     canonical["logical_markers"] = []
     canonical_path.write_text(json.dumps(canonical, ensure_ascii=False), encoding="utf-8")
+    _refresh_validation(run)
 
     with pytest.raises(
         RuntimeError, match="all-pages Chat packet requires a positive manifest page_count"
@@ -604,6 +638,7 @@ def test_v2_packet_rejects_auto_verified_marker_without_verified_range(
     )
     canonical_path.write_text(json.dumps(canonical, ensure_ascii=False), encoding="utf-8")
 
+    _refresh_validation(run)
     result = build_chat_packet(run_dir=run)
     packet = Path(result.packet_path)
     tampered = tmp_path / "auto-verified-without-range.zip"
