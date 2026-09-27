@@ -138,6 +138,40 @@ def test_worker_processes_exact_stable_pages_and_persists_run(tmp_path: Path) ->
     assert result.chat_packet_status is None
 
 
+def test_worker_uses_page_occurrences_when_stable_ids_repeat(tmp_path: Path) -> None:
+    source = tmp_path / "repeated.pdf"
+    document = pymupdf.open()
+    for _ in range(2):
+        page = document.new_page(width=400, height=550)
+        page.insert_text((40, 80), "identical page")
+    document.save(source)
+    document.close()
+    settings = LocalSettings(home=tmp_path / "home")
+    snapshot = snapshot_source(source, settings=settings)
+    index = ensure_source_page_index(snapshot, settings.cache_dir)
+    stable_ids = [page.stable_page_id for page in index.pages]
+    assert stable_ids[0] == stable_ids[1]
+
+    questions = QuestionStateStore(settings.state_db)
+    questions.ensure_in_progress(
+        "criminal", "22", latest_source_sha256=snapshot.sha256,
+        stable_page_ids=stable_ids,
+    )
+    questions.transition("criminal", "22", QuestionStatus.DONE_DETECTED)
+    questions.transition("criminal", "22", QuestionStatus.SYNC_STABLE)
+    AutomationStateStore(settings.state_db).enqueue(
+        subject="criminal", question="22", source_sha256=snapshot.sha256,
+        stable_page_ids=stable_ids, source_page_numbers=[1, 2],
+        source_snapshot=snapshot,
+    )
+    pipeline = FakePipeline()
+
+    result = process_next_work_item(pipeline=pipeline, settings=settings)
+
+    assert result.reason == "INGEST_COMPLETED"
+    assert result.pages == [1, 2]
+
+
 def test_worker_failure_returns_question_to_sync_stable(tmp_path: Path) -> None:
     settings, queue, questions, _source_sha = _queue_question(tmp_path)
     pipeline = FakePipeline(fail=True)

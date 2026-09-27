@@ -26,6 +26,7 @@ class WorkItem(BaseModel):
     question: str
     source_sha256: str
     stable_page_ids: list[str] = Field(default_factory=list)
+    source_page_numbers: list[int] = Field(default_factory=list)
     source_snapshot: SourceSnapshot | None = None
     status: WorkStatus
     attempt_count: int = 0
@@ -91,6 +92,7 @@ class AutomationStateStore:
                     question TEXT NOT NULL,
                     source_sha256 TEXT NOT NULL,
                     stable_page_ids_json TEXT NOT NULL DEFAULT '[]',
+                    source_page_numbers_json TEXT NOT NULL DEFAULT '[]',
                     source_snapshot_json TEXT,
                     status TEXT NOT NULL,
                     attempt_count INTEGER NOT NULL DEFAULT 0,
@@ -111,6 +113,7 @@ class AutomationStateStore:
             }
             for name, definition in (
                 ("source_snapshot_json", "TEXT"),
+                ("source_page_numbers_json", "TEXT NOT NULL DEFAULT '[]'"),
                 ("output_dir", "TEXT"),
                 ("run_id", "TEXT"),
             ):
@@ -127,6 +130,7 @@ class AutomationStateStore:
             question=row["question"],
             source_sha256=row["source_sha256"],
             stable_page_ids=json.loads(row["stable_page_ids_json"]),
+            source_page_numbers=json.loads(row["source_page_numbers_json"]),
             source_snapshot=(
                 SourceSnapshot.model_validate_json(row["source_snapshot_json"])
                 if row["source_snapshot_json"]
@@ -193,10 +197,12 @@ class AutomationStateStore:
         question: str,
         source_sha256: str,
         stable_page_ids: list[str],
+        source_page_numbers: list[int] | None = None,
         source_snapshot: SourceSnapshot | None = None,
     ) -> WorkItem:
         now = self._now()
         pages_json = json.dumps(stable_page_ids, ensure_ascii=False, sort_keys=True)
+        page_numbers_json = json.dumps(source_page_numbers or [])
         snapshot_json = (
             source_snapshot.model_dump_json() if source_snapshot is not None else None
         )
@@ -205,9 +211,10 @@ class AutomationStateStore:
                 """
                 INSERT INTO automation_work_queue (
                     subject, question, source_sha256, stable_page_ids_json,
-                    source_snapshot_json, status, attempt_count, last_error,
+                    source_page_numbers_json, source_snapshot_json, status,
+                    attempt_count, last_error,
                     output_dir, run_id, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, 0, NULL, NULL, NULL, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, NULL, ?, ?)
                 ON CONFLICT(subject, question, source_sha256) DO NOTHING
                 """,
                 (
@@ -215,6 +222,7 @@ class AutomationStateStore:
                     question,
                     source_sha256,
                     pages_json,
+                    page_numbers_json,
                     snapshot_json,
                     WorkStatus.PENDING.value,
                     now,

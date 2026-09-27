@@ -108,6 +108,14 @@ def _advance_and_queue_completions(
                     question=question,
                     source_sha256=verified_sha256,
                     stable_page_ids=record.stable_page_ids,
+                    source_page_numbers=list(
+                        range(
+                            item.resolution.start_page,
+                            item.done_detection.page_number + 1,
+                        )
+                    )
+                    if item.resolution.start_page is not None
+                    else None,
                     source_snapshot=snapshot,
                 )
                 queue_item_id = queued.id
@@ -485,6 +493,7 @@ def watch_pdf_updates(
     stability_equal_observations: int = 3,
     stability_timeout_seconds: float = 90.0,
     max_backtrack: int = 16,
+    yield_idle: bool = False,
 ) -> Iterator[AutomationCycleResult]:
     """Continuously watch one PDF, including changes missed during downtime."""
     if poll_interval_seconds <= 0:
@@ -512,6 +521,13 @@ def watch_pdf_updates(
         time.sleep(poll_interval_seconds)
         event: FileUpdateEvent | None = watcher.poll_once()
         if event is None:
+            if yield_idle:
+                yield AutomationCycleResult(
+                    source_path=str(Path(pdf).expanduser().resolve()),
+                    reason="WATCH_IDLE",
+                    stable=True,
+                    current_source_sha256=baseline.source_sha256,
+                )
             continue
 
         baseline, result = process_pdf_update(

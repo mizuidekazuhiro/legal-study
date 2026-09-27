@@ -318,6 +318,7 @@ def process_bridge_command(
     obsidian_inbox: Path,
     settings: LocalSettings | None = None,
     notion_registrar: NotionRegistrar | None = None,
+    notion_registrar_factory: Callable[[], NotionRegistrar | None] | None = None,
 ) -> BridgeWorkerResult:
     cfg = settings or LocalSettings()
     cfg.ensure()
@@ -391,6 +392,8 @@ def process_bridge_command(
             obsidian_path = apply_report.inbox_path
 
         if command.action in {BridgeAction.REGISTER_NOTION, BridgeAction.APPLY_ALL}:
+            if notion_registrar is None and notion_registrar_factory is not None:
+                notion_registrar = notion_registrar_factory()
             if notion_registrar is None:
                 raise RuntimeError(
                     "Notion registration was authorized but no Notion registrar "
@@ -464,11 +467,14 @@ def watch_bridge_commands(
     notion_registrar_factory: Callable[[], NotionRegistrar | None] | None = None,
     poll_interval_seconds: float = 5.0,
     stable_seconds: float = 3.0,
+    retry_seconds: float = 30.0,
 ) -> Iterator[BridgeWorkerResult]:
     if poll_interval_seconds <= 0:
         raise ValueError("poll_interval_seconds must be > 0")
     if stable_seconds < 0:
         raise ValueError("stable_seconds must be >= 0")
+    if retry_seconds <= 0:
+        raise ValueError("retry_seconds must be > 0")
 
     cfg = settings or LocalSettings()
     cfg.ensure()
@@ -519,9 +525,8 @@ def watch_bridge_commands(
             if now - unchanged_since < stable_seconds:
                 continue
 
-            registrar = None
             try:
-                preview = BridgeCommand.model_validate_json(
+                BridgeCommand.model_validate_json(
                     path.read_text(encoding="utf-8")
                 )
             except Exception as exc:  # noqa: BLE001 -- isolate malformed commands
@@ -546,19 +551,19 @@ def watch_bridge_commands(
                 )
                 observations[path] = (signature[0], signature[1], now + 10**9)
                 continue
-            if notion_registrar_factory is not None and preview.action in {
-                BridgeAction.REGISTER_NOTION,
-                BridgeAction.APPLY_ALL,
-            }:
-                registrar = notion_registrar_factory()
-
-            yield process_bridge_command(
+            result = process_bridge_command(
                 command_path=path,
                 bridge_root=layout.root,
                 obsidian_inbox=inbox,
                 settings=cfg,
-                notion_registrar=registrar,
+                notion_registrar_factory=notion_registrar_factory,
             )
-            observations[path] = (signature[0], signature[1], now + 10**9)
+            yield result
+            next_attempt = (
+                now + max(0.0, retry_seconds - stable_seconds)
+                if result.status == "FAILED"
+                else now + 10**9
+            )
+            observations[path] = (signature[0], signature[1], next_attempt)
 
         time.sleep(poll_interval_seconds)

@@ -34,6 +34,7 @@ class QueueWorkerResult(BaseModel):
 def _resolve_stable_pages(
     *,
     stable_page_ids: list[str],
+    source_page_numbers: list[int] | None,
     source_sha256: str,
     settings: LocalSettings,
     snapshot: SourceSnapshot,
@@ -44,6 +45,20 @@ def _resolve_stable_pages(
         raise RuntimeError("Queued source snapshot SHA does not match work item SHA")
 
     index = ensure_source_page_index(snapshot, settings.cache_dir)
+    if source_page_numbers:
+        if len(source_page_numbers) != len(stable_page_ids):
+            raise RuntimeError("Queued page numbers do not match stable page ids")
+        by_number = {page.page_number: page.stable_page_id for page in index.pages}
+        for page_number, stable_page_id in zip(
+            source_page_numbers, stable_page_ids, strict=True
+        ):
+            if by_number.get(page_number) != stable_page_id:
+                raise RuntimeError(
+                    "Queued page occurrence does not match immutable snapshot: "
+                    f"page {page_number}"
+                )
+        return list(source_page_numbers)
+
     by_id: dict[str, list[int]] = {}
     for page in index.pages:
         by_id.setdefault(page.stable_page_id, []).append(page.page_number)
@@ -124,6 +139,7 @@ def process_next_work_item(
 
         pages = _resolve_stable_pages(
             stable_page_ids=item.stable_page_ids,
+            source_page_numbers=item.source_page_numbers,
             source_sha256=item.source_sha256,
             settings=cfg,
             snapshot=item.source_snapshot,

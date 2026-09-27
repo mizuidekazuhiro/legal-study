@@ -6,6 +6,7 @@ import pytest
 import legal_study.chat_bridge_worker as bridge_worker
 from legal_study.chat_bridge_worker import (
     BridgeCommand,
+    BridgeWorkerResult,
     process_bridge_command,
     watch_bridge_commands,
 )
@@ -441,3 +442,112 @@ def test_watcher_isolates_malformed_command(tmp_path: Path, monkeypatch) -> None
 
     assert result.status == "INVALID_COMMAND"
     assert Path(result.receipt_path or "").is_file()
+
+
+def test_watcher_continues_to_later_command_after_malformed_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = LocalSettings(home=tmp_path / "home")
+    bridge = tmp_path / "bridge"
+    for name in ("10_approved", "20_commands", "30_receipts", "99_failed"):
+        (bridge / name).mkdir(parents=True)
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    (bridge / "20_commands" / "a-broken.json").write_text("{", encoding="utf-8")
+    valid = BridgeCommand(
+        command_id="valid-001", action="apply_obsidian", subject="criminal",
+        question="16", source_sha256="a" * 64, run_id="r" * 64,
+        result_file="10_approved/result.json", result_sha256="b" * 64,
+        approved_at="2026-09-23T00:00:00Z", approval_text="承認",
+    )
+    (bridge / "20_commands" / "b-valid.json").write_text(
+        valid.model_dump_json(), encoding="utf-8"
+    )
+    monkeypatch.setattr(bridge_worker.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        bridge_worker,
+        "process_bridge_command",
+        lambda **_kwargs: BridgeWorkerResult(processed=True, status="SUCCESS"),
+    )
+    watcher = watch_bridge_commands(
+        bridge_root=bridge, obsidian_inbox=inbox, settings=settings,
+        poll_interval_seconds=0.01, stable_seconds=0,
+    )
+
+    assert next(watcher).status == "INVALID_COMMAND"
+    assert next(watcher).status == "SUCCESS"
+
+
+def test_watcher_retries_transient_command_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = LocalSettings(home=tmp_path / "home")
+    bridge = tmp_path / "bridge"
+    for name in ("10_approved", "20_commands", "30_receipts", "99_failed"):
+        (bridge / name).mkdir(parents=True)
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    command = BridgeCommand(
+        command_id="retry-001", action="apply_obsidian", subject="criminal",
+        question="16", source_sha256="a" * 64, run_id="r" * 64,
+        result_file="10_approved/result.json", result_sha256="b" * 64,
+        approved_at="2026-09-23T00:00:00Z", approval_text="承認",
+    )
+    (bridge / "20_commands" / "retry.json").write_text(
+        command.model_dump_json(), encoding="utf-8"
+    )
+    calls = 0
+
+    def fail_then_succeed(**_kwargs: object) -> BridgeWorkerResult:
+        nonlocal calls
+        calls += 1
+        return BridgeWorkerResult(
+            processed=True, status="FAILED" if calls == 1 else "SUCCESS"
+        )
+
+    clock = iter(range(0, 1000, 31))
+    monkeypatch.setattr(bridge_worker.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(bridge_worker.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(bridge_worker, "process_bridge_command", fail_then_succeed)
+    watcher = watch_bridge_commands(
+        bridge_root=bridge, obsidian_inbox=inbox, settings=settings,
+        poll_interval_seconds=0.01, stable_seconds=0, retry_seconds=30,
+    )
+
+    assert next(watcher).status == "FAILED"
+    assert next(watcher).status == "SUCCESS"
+    assert calls == 2
+
+
+def test_notion_factory_failure_is_receipted(tmp_path: Path) -> None:
+    settings = LocalSettings(home=tmp_path / "home")
+    settings.ensure()
+    _run, run_id, source_sha = _write_run(settings)
+    bridge = tmp_path / "bridge"
+    for name in ("10_approved", "20_commands", "30_receipts", "99_failed"):
+        (bridge / name).mkdir(parents=True)
+    result_file = bridge / "10_approved" / "result.json"
+    _write_result(result_file, source_sha)
+    command = BridgeCommand(
+        command_id="notion-init-001", action="register_notion", subject="criminal",
+        question="16", source_sha256=source_sha, run_id=run_id,
+        result_file="10_approved/result.json", result_sha256=file_sha256(result_file),
+        approved_at="2026-09-23T00:00:00Z", approval_text="承認",
+        notion_registration_authorized=True,
+    )
+    command_path = bridge / "20_commands" / "notion.json"
+    command_path.write_text(command.model_dump_json(), encoding="utf-8")
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+
+    def fail_factory():
+        raise RuntimeError("missing Notion credentials")
+
+    result = process_bridge_command(
+        command_path=command_path, bridge_root=bridge, obsidian_inbox=inbox,
+        settings=settings, notion_registrar_factory=fail_factory,
+    )
+
+    assert result.status == "FAILED"
+    assert Path(result.receipt_path or "").is_file()
+    assert "missing Notion credentials" in (result.error or "")

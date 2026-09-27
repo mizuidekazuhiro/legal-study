@@ -234,8 +234,10 @@ def watch_study(
             stability_equal_observations=stability_equal_observations,
             stability_timeout_seconds=stability_timeout_seconds,
             max_backtrack=max_backtrack,
+            yield_idle=True,
         ):
-            console.print(result.model_dump_json())
+            if result.reason != "WATCH_IDLE":
+                console.print(result.model_dump_json())
             for worker_result in drain_pending_work(
                 pipeline=pipeline,
                 settings=settings,
