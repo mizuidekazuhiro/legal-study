@@ -183,3 +183,46 @@ def test_zero_height_stroke_uses_its_painted_width_for_line_overlap() -> None:
 
     assert aligned[0]["exact_text"] == "対象"
     assert aligned[0]["position_status"] == "VERIFIED"
+
+
+
+import pytest
+
+
+@pytest.mark.parametrize(
+    "suspicious_text",
+    [
+        "前文�後文",
+        "前文後文",
+        "前文Ж後文",
+        "前文noise後文",
+    ],
+)
+def test_suspicious_reconciled_marker_text_stays_review_required(
+    suspicious_text: str,
+) -> None:
+    pages = [
+        {
+            "page_number": 1,
+            "text_layer_trust": "medium",
+            "reconciled_text": suspicious_text,
+        }
+    ]
+    markers = [
+        _marker(
+            text=suspicious_text,
+            bbox=[10, 10, 50, 20],
+            status="AUTO_VERIFIED",
+        )
+    ]
+
+    aligned = align_markers_to_canonical_pages(pages, markers, {"pages": {}})
+
+    marker = aligned[0]
+    assert marker["canonical_start_char"] == 0
+    assert marker["canonical_end_char_exclusive"] == len(suspicious_text)
+    assert marker["exact_text"] == suspicious_text
+    assert marker["position_status"] == "VERIFIED"
+    assert marker["text_accuracy_status"] == "NEEDS_REVIEW"
+    assert marker["review_status"] == "NEEDS_REVIEW"
+    assert marker["reason"] == "canonical_text_contains_suspicious_glyph_or_token"

@@ -107,6 +107,9 @@ def validate_chat_packet_structure(packet: Path) -> dict[str, Any]:
             expected_reviews = {f"review/page-{page:04d}-review.png" for page in requested}
             handoff = archive.read("handoff.md").decode("utf-8")
             marker_payload = json.loads(archive.read("marker_index.json"))
+            logical_markers_value = marker_payload.get("logical_markers")
+            logical_markers_are_list = isinstance(logical_markers_value, list)
+            logical_markers = logical_markers_value if logical_markers_are_list else []
             packet_schema = manifest.get("schema_version")
             supported_packet_schema = packet_schema in {"chat_packet.v1", "chat_packet.v2"}
             marker_schema_v2 = packet_schema == "chat_packet.v2"
@@ -165,12 +168,26 @@ def validate_chat_packet_structure(packet: Path) -> dict[str, Any]:
                 int(page["page_number"]): page
                 for page in page_text_entries
             }
+            declared_marker_count = manifest.get("logical_marker_count")
+            marker_count_matches_manifest = (
+                not marker_schema_v2
+                or (
+                    type(declared_marker_count) is int
+                    and logical_markers_are_list
+                    and len(logical_markers) == declared_marker_count
+                )
+            )
             marker_refs_valid = (
                 not marker_schema_v2
-                or (marker_schema_consistent and page_text_present and page_text_schema_valid)
+                or (
+                    marker_schema_consistent
+                    and page_text_present
+                    and page_text_schema_valid
+                    and marker_count_matches_manifest
+                )
             )
             if marker_schema_v2:
-                for marker in marker_payload.get("logical_markers", []):
+                for marker in logical_markers:
                     page = page_texts.get(int(marker["page_number"]))
                     reference = marker.get("text_reference")
                     if page is None or not isinstance(reference, dict):
@@ -211,6 +228,7 @@ def validate_chat_packet_structure(packet: Path) -> dict[str, Any]:
                 "page_text_entries_valid_for_v2": not marker_schema_v2 or page_text_entries_valid,
                 "page_text_pages_match_manifest": page_text_pages_match_manifest,
                 "page_text_hashes_valid": page_text_hashes_valid,
+                "marker_count_matches_manifest": marker_count_matches_manifest,
                 "review_pages_match_manifest": expected_reviews
                 == {name for name in names if name.startswith("review/")},
                 "handoff_pages_match_manifest": all(

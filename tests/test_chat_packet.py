@@ -403,3 +403,29 @@ def test_v2_packet_validates_every_requested_page_text_without_markers(
 
     with pytest.raises(RuntimeError, match="structural validation failed"):
         validate_chat_packet_structure(tampered)
+
+
+
+@pytest.mark.parametrize("replacement", [[], {}])
+def test_v2_packet_rejects_marker_count_or_type_mismatch(
+    tmp_path: Path, replacement: object
+) -> None:
+    run = _run(tmp_path)
+    _upgrade_run_to_v2(run)
+    result = build_chat_packet(run_dir=run)
+    packet = Path(result.packet_path)
+    tampered = tmp_path / ("marker-empty.zip" if replacement == [] else "marker-not-list.zip")
+
+    with zipfile.ZipFile(packet) as source, zipfile.ZipFile(
+        tampered, "w", compression=zipfile.ZIP_DEFLATED
+    ) as target:
+        for name in source.namelist():
+            payload = source.read(name)
+            if name == "marker_index.json":
+                marker_payload = json.loads(payload)
+                marker_payload["logical_markers"] = replacement
+                payload = json.dumps(marker_payload, ensure_ascii=False).encode("utf-8")
+            target.writestr(name, payload)
+
+    with pytest.raises(RuntimeError, match="structural validation failed"):
+        validate_chat_packet_structure(tampered)

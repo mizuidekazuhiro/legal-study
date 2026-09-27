@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 from typing import Any
 
+from legal_study.pdf.quality import suspicious_char_count, suspicious_token_count
+
 _CONTROL_CHARS = {chr(value) for value in range(32)} - {"\n", "\r", "\t"}
 _RANGE_SEMANTICS = "page_unicode_codepoints_end_exclusive"
 
@@ -27,6 +29,14 @@ def _full_page_result(ocr_payload: dict[str, Any], page_number: int) -> dict[str
 
 def _contains_bad_control_text(text: str | None) -> bool:
     return bool(text and any(char in _CONTROL_CHARS for char in text))
+
+
+def _text_accuracy_is_clean(text: str | None) -> bool:
+    return bool(
+        text
+        and suspicious_char_count(text) == 0
+        and suspicious_token_count(text) == 0
+    )
 
 
 def _canonical_page_text(
@@ -188,9 +198,8 @@ def _align_marker(
         aligned["reason"] = "ocr_line_geometry_cannot_prove_partial_character_boundary"
     else:
         aligned["exact_text"] = canonical_text[selected[0] : selected[1]]
-        if canonical_source == "reconciled_text" and not _contains_bad_control_text(
-            aligned["exact_text"]
-        ):
+        text_accuracy_clean = _text_accuracy_is_clean(aligned["exact_text"])
+        if canonical_source == "reconciled_text" and text_accuracy_clean:
             aligned["position_status"] = "VERIFIED"
             aligned["text_accuracy_status"] = "VERIFIED"
             if boundary_was_verified:
@@ -203,7 +212,11 @@ def _align_marker(
             aligned["position_status"] = "VERIFIED"
             aligned["text_accuracy_status"] = "NEEDS_REVIEW"
             aligned["review_status"] = "NEEDS_REVIEW"
-            aligned["reason"] = "ocr_primary_text_requires_independent_accuracy_review"
+            aligned["reason"] = (
+                "canonical_text_contains_suspicious_glyph_or_token"
+                if canonical_source == "reconciled_text" and not text_accuracy_clean
+                else "ocr_primary_text_requires_independent_accuracy_review"
+            )
 
     _set_reference(
         aligned,
