@@ -281,6 +281,14 @@ def main():
                     log.warning("Drive bridge paths unavailable; retrying")
             state["bridge_available"] = paths_now_available
             now = time.monotonic()
+            if not paths_now_available and "study" in children:
+                study_child = children["study"]
+                if study_child.poll() is None:
+                    log.warning(
+                        "Drive bridge paths unavailable; stopping study worker pid=%s",
+                        study_child.pid,
+                    )
+                    study_child.terminate()
             if (
                 "bridge" not in children
                 and paths_now_available

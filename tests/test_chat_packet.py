@@ -7,7 +7,7 @@ import pytest
 
 from legal_study.chat_bridge_worker import BridgeAction, BridgeCommand
 from legal_study.chat_contract import command_filename
-from legal_study.chat_packet import build_chat_packet
+from legal_study.chat_packet import _chat_instructions, build_chat_packet
 from legal_study.chat_packet_validation import validate_chat_packet_structure
 from legal_study.chat_result import ChatStudyResult
 
@@ -225,6 +225,18 @@ def test_invalid_problem_packet_is_not_exported(tmp_path: Path) -> None:
 
     with pytest.raises(RuntimeError, match="not valid"):
         build_chat_packet(run_dir=run)
+
+
+@pytest.mark.parametrize(
+    ("subject", "deck"),
+    [
+        ("criminal", "刑法 論文試験"),
+        ("constitutional", "憲法 論文試験"),
+        ("administrative", "行政法 論文試験"),
+    ],
+)
+def test_chat_instructions_use_subject_deck(subject: str, deck: str) -> None:
+    assert f"subject deck {deck}" in _chat_instructions(subject)
 
 
 def test_packet_without_supplemental_keeps_primary_evidence(tmp_path: Path) -> None:

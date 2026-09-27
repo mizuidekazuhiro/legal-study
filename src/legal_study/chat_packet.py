@@ -213,7 +213,9 @@ def build_chat_packet(
             )
         if supplemental_payload is not None:
             _write_json(archive, "supplemental.json", supplemental_payload)
-        archive.writestr("CHAT_INSTRUCTIONS.md", _chat_instructions())
+        archive.writestr(
+            "CHAT_INSTRUCTIONS.md", _chat_instructions(manifest.subject)
+        )
         for page_number, path in review_files:
             archive.write(
                 path,
@@ -313,8 +315,15 @@ def _compact_supplemental(
     }
 
 
-def _chat_instructions() -> str:
-    return """# Chat Bridge Instructions
+def _chat_instructions(subject: str) -> str:
+    deck = {
+        "criminal": "刑法 論文試験",
+        "constitutional": "憲法 論文試験",
+        "administrative": "行政法 論文試験",
+    }.get(subject)
+    if deck is None:
+        raise ValueError(f"Unsupported subject for chat instructions: {subject}")
+    return f"""# Chat Bridge Instructions
 
 Use this in a normal ChatGPT Project chat, not Work mode or an API workflow.
 Project Sources govern; their full instructions are not copied here.
@@ -331,7 +340,7 @@ Project Sources govern; their full instructions are not copied here.
    Copy subject, question, source_sha256 and requested_pages exactly into
    study_result.source. Set reviewed_pages only for pages actually checked in
    review/*.png; all requested pages must be reviewed. Record unresolved issues.
-   Use the listed Anki fields, the criminal deck 刑法 論文試験, and shared
+   Use the listed Anki fields, the subject deck {deck}, and shared
    problem_card_extra rather than duplicating the full answer per problem card.
 5. Show every Anki card and the Obsidian draft in full before asking approval.
    If unresolved is nonempty, source differs, markers remain undecided or visual
