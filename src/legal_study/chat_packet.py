@@ -78,24 +78,27 @@ def build_chat_packet(
         for page in (canonical.get("pages") or [])
         if isinstance(page, dict) and page.get("page_number") is not None
     ]
-    if len(canonical_page_numbers) != len(set(canonical_page_numbers)):
-        raise RuntimeError("canonical pages contain duplicate page_number values")
-    if manifest.requested_pages is not None:
-        effective_requested_pages = list(manifest.requested_pages)
-    else:
-        if manifest.page_count is None or manifest.page_count < 1:
-            raise RuntimeError(
-                "all-pages Chat packet requires a positive manifest page_count"
-            )
-        effective_requested_pages = list(range(1, manifest.page_count + 1))
+    if marker_schema_v2:
+        if len(canonical_page_numbers) != len(set(canonical_page_numbers)):
+            raise RuntimeError("canonical pages contain duplicate page_number values")
+        if manifest.requested_pages is not None:
+            effective_requested_pages = list(manifest.requested_pages)
+        else:
+            if manifest.page_count is None or manifest.page_count < 1:
+                raise RuntimeError(
+                    "all-pages Chat packet requires a positive manifest page_count"
+                )
+            effective_requested_pages = list(range(1, manifest.page_count + 1))
 
-    if (
-        len(canonical_page_numbers) != len(effective_requested_pages)
-        or set(canonical_page_numbers) != set(effective_requested_pages)
-    ):
-        raise RuntimeError(
-            "canonical pages do not match the effective requested page set"
-        )
+        if (
+            len(canonical_page_numbers) != len(effective_requested_pages)
+            or set(canonical_page_numbers) != set(effective_requested_pages)
+        ):
+            raise RuntimeError(
+                "canonical pages do not match the effective requested page set"
+            )
+    else:
+        effective_requested_pages = list(manifest.requested_pages or [])
 
     page_text_index = [
         {
