@@ -37,8 +37,8 @@ class BundleLogicalMarker(StrictBundleModel):
     page_number: int = Field(ge=1)
     color: str = Field(min_length=1)
     exact_text: str | None = Field(default=None, min_length=1)
-    start_char: int = Field(ge=0)
-    end_char: int = Field(ge=0)
+    start_char: int | None = Field(default=None, ge=0)
+    end_char: int | None = Field(default=None, ge=0)
     canonical_start_char: int | None = Field(default=None, ge=0)
     canonical_end_char_exclusive: int | None = Field(default=None, ge=0)
     character_range_semantics: str | None = None
@@ -282,9 +282,11 @@ def _read_logical_markers(
         )
         if not unresolved_v4 and (not isinstance(exact_text, str) or not exact_text):
             raise ValueError(f"Logical marker {marker_id} exact_text is missing")
-        if not isinstance(start_char, int) or not isinstance(end_char, int):
+        if not unresolved_v4 and (
+            not isinstance(start_char, int) or not isinstance(end_char, int)
+        ):
             raise TypeError(f"Logical marker {marker_id} char bounds must be integers")
-        if end_char < start_char:
+        if isinstance(start_char, int) and isinstance(end_char, int) and end_char < start_char:
             raise ValueError(f"Logical marker {marker_id} has reversed char bounds")
         if not isinstance(review_status, str) or not review_status.strip():
             raise ValueError(f"Logical marker {marker_id} review_status is missing")
@@ -336,7 +338,14 @@ def _read_logical_markers(
             )
         )
 
-    return sorted(result, key=lambda item: (item.page_number, item.start_char, item.id))
+    return sorted(
+        result,
+        key=lambda item: (
+            item.page_number,
+            item.start_char if item.start_char is not None else -1,
+            item.id,
+        ),
+    )
 
 
 def source_subject_hint(subject: str) -> str:

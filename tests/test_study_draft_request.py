@@ -322,6 +322,8 @@ def test_v4_unresolved_marker_is_preserved_for_visual_review(tmp_path: Path) -> 
     marker.update(
         {
             "exact_text": None,
+            "start_char": None,
+            "end_char": None,
             "canonical_start_char": None,
             "canonical_end_char_exclusive": None,
             "character_range_semantics": "page_unicode_codepoints_end_exclusive",
@@ -341,4 +343,6 @@ def test_v4_unresolved_marker_is_preserved_for_visual_review(tmp_path: Path) -> 
     assert unresolved.exact_text is None
     assert unresolved.canonical_start_char is None
     assert unresolved.canonical_end_char_exclusive is None
+    assert unresolved.start_char is None
+    assert unresolved.end_char is None
     assert unresolved.review_status == "NEEDS_REVIEW"
