@@ -85,10 +85,23 @@ def _advance_and_queue_completions(
     question_state = QuestionStateStore(settings.state_db)
     automation_state = AutomationStateStore(settings.state_db)
     results: list[QuestionAutomationResult] = []
+    latest_by_question: dict[str, CompletionApplyResult] = {}
     for item in completions:
         question = item.resolution.question
         if question is None:
             continue
+        current = latest_by_question.get(question)
+        if (
+            current is None
+            or item.done_detection.page_number > current.done_detection.page_number
+        ):
+            latest_by_question[question] = item
+
+    for item in sorted(
+        latest_by_question.values(), key=lambda value: value.done_detection.page_number
+    ):
+        question = item.resolution.question
+        assert question is not None
         sync_updated = False
         status = item.current_status
         if status == QuestionStatus.DONE_DETECTED:

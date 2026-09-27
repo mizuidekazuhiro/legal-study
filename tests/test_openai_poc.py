@@ -276,7 +276,7 @@ def test_one_question_poc_calls_responses_once_and_accepts_candidate(tmp_path: P
     request = client.responses.calls[0]
     assert request["model"] == "gpt-5.6"
     assert request["reasoning"] == {"effort": "high", "mode": "standard"}
-    assert request["store"] is False
+    assert request["store"] is True
     assert request["background"] is True
     assert request["max_output_tokens"] == 64000
     assert request["extra_headers"]["Idempotency-Key"].startswith("legal-study-")

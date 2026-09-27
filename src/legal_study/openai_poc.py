@@ -34,7 +34,7 @@ class OpenAIPocConfig(StrictPocModel):
     model: str = Field(default="gpt-5.6", min_length=1)
     reasoning_effort: Literal["none", "low", "medium", "high", "xhigh", "max"] = "high"
     reasoning_mode: Literal["standard", "pro"] = "standard"
-    store: Literal[False] = False
+    store: Literal[True] = True
     background: Literal[True] = True
     max_output_tokens: int = Field(default=64000, ge=1024, le=128000)
     image_detail: Literal["low", "high", "original", "auto"] = "original"
