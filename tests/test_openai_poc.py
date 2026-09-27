@@ -89,6 +89,7 @@ review_issue_count: 0
 講師答案本文
 """,
         encoding="utf-8",
+        newline="\n",
     )
     (run_dir / "handoff_review/page-0110-review.png").write_bytes(b"png")
 
@@ -591,3 +592,55 @@ def test_background_response_is_polled_to_completion(tmp_path: Path) -> None:
     assert receipt["state"] == "COMPLETED"
     assert receipt["response_id"] == "resp_test_123"
     assert receipt["background"] is True
+
+
+def test_background_response_resumes_from_failed_poll_without_second_create(
+    tmp_path: Path,
+) -> None:
+    run_dir, bundle = _bundle(tmp_path)
+    queued = _response(status="in_progress")
+
+    class InitialResponses:
+        def create(self, **_kwargs):
+            return queued
+
+        def retrieve(self, _response_id):
+            raise ConnectionError("temporary polling failure")
+
+    with pytest.raises(ConnectionError, match="temporary polling failure"):
+        run_openai_study_draft_poc(
+            bundle=bundle,
+            run_dir=run_dir,
+            client=SimpleNamespace(responses=InitialResponses()),
+            config=OpenAIPocConfig(poll_interval_seconds=0.1),
+        )
+
+    completed = _response(
+        status="completed",
+        output_text=json.dumps(_draft_payload(bundle), ensure_ascii=False),
+    )
+
+    class ResumeResponses:
+        def __init__(self):
+            self.create_calls = 0
+            self.retrieve_calls = []
+
+        def create(self, **_kwargs):
+            self.create_calls += 1
+            raise AssertionError("resume must not create a second response")
+
+        def retrieve(self, response_id):
+            self.retrieve_calls.append(response_id)
+            return completed
+
+    responses = ResumeResponses()
+    result = run_openai_study_draft_poc(
+        bundle=bundle,
+        run_dir=run_dir,
+        client=SimpleNamespace(responses=responses),
+        config=OpenAIPocConfig(poll_interval_seconds=0.1),
+    )
+
+    assert result.accepted is True
+    assert responses.create_calls == 0
+    assert responses.retrieve_calls == ["resp_test_123"]

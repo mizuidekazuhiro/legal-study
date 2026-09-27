@@ -344,24 +344,14 @@ def process_pdf_update(
     if not candidate_pages:
         return current_index, result
 
-    completions: list[CompletionApplyResult] = apply_done_markers_to_snapshot(
+    result.detected_done_pages, result.questions = reconcile_unregistered_done(
         snapshot,
         subject=subject,
         ocr_engine=ocr_engine,
         settings=cfg,
-        pages=candidate_pages,
+        include_revisions=True,
+        done_pages=candidate_pages,
         max_backtrack=max_backtrack,
-    )
-    result.detected_done_pages = sorted(
-        item.done_detection.page_number for item in completions if item.done_detection.detected
-    )
-
-    result.questions = _advance_and_queue_completions(
-        completions,
-        subject=subject,
-        verified_sha256=stable.sha256,
-        snapshot=snapshot,
-        settings=cfg,
     )
     return current_index, result
 
@@ -451,15 +441,30 @@ def recover_watch_startup(
             watch_state.last_processed_sha256,
         )
     except FileNotFoundError:
-        return None, AutomationCycleResult(
+        automation_state.set_watch_baseline(
+            subject,
+            pdf,
+            current_index.source_sha256,
+        )
+        result = AutomationCycleResult(
             source_path=source_path,
-            reason="PERSISTED_BASELINE_INDEX_MISSING",
+            reason="PERSISTED_BASELINE_REESTABLISHED",
             stable=True,
             stable_sha256=current_index.source_sha256,
             baseline_source_sha256=watch_state.last_processed_sha256,
             current_source_sha256=current_index.source_sha256,
             recovered_work_items=recovered,
         )
+        snapshot = snapshot_source(pdf, settings=cfg)
+        result.detected_done_pages, result.questions = reconcile_unregistered_done(
+            snapshot,
+            subject=subject,
+            ocr_engine=ocr_engine,
+            settings=cfg,
+            include_revisions=True,
+            max_backtrack=max_backtrack,
+        )
+        return current_index, result
 
     processed_index, result = process_pdf_update(
         pdf,

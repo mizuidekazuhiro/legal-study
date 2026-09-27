@@ -245,6 +245,34 @@ def test_restart_recovery_returns_running_queue_item_to_pending(tmp_path: Path) 
     assert pending[0].question == "21"
 
 
+def test_restart_reestablishes_missing_persisted_page_index(tmp_path: Path) -> None:
+    source = tmp_path / "source.pdf"
+    settings = LocalSettings(home=tmp_path / "home")
+    _write_pdf(source)
+    old_snapshot = snapshot_source(source, settings=settings)
+    ensure_source_page_index(old_snapshot, settings.cache_dir)
+    automation = AutomationStateStore(settings.state_db)
+    automation.set_watch_baseline("criminal", source, old_snapshot.sha256)
+    (settings.cache_dir / "page_indexes" / f"{old_snapshot.sha256}.json").unlink()
+    _write_pdf(source, changed_text=True)
+
+    current, result = recover_watch_startup(
+        source,
+        subject="criminal",
+        ocr_engine=HeaderOcr(),
+        settings=settings,
+        stability_interval_seconds=0,
+        stability_equal_observations=2,
+        stability_timeout_seconds=1,
+    )
+
+    assert current is not None
+    assert result.reason == "PERSISTED_BASELINE_REESTABLISHED"
+    watch_state = automation.get_watch_state("criminal", source)
+    assert watch_state is not None
+    assert watch_state.last_processed_sha256 == current.source_sha256
+
+
 def test_first_watch_startup_reconciles_unregistered_done_without_full_change(
     tmp_path: Path,
 ) -> None:

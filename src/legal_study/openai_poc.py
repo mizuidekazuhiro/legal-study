@@ -142,10 +142,6 @@ def run_openai_study_draft_poc(
 
     cfg = config or OpenAIPocConfig()
     receipt_path = root / "study_draft_api_receipt.json"
-    if receipt_path.exists():
-        raise RuntimeError(
-            "API receipt already exists; refusing a second API call for this run"
-        )
 
     template = build_openai_responses_request_template(
         bundle=bundle,
@@ -168,35 +164,43 @@ def run_openai_study_draft_poc(
     request_hash = _request_sha256(request_payload)
     api_client = client if client is not None else _default_openai_client()
 
-    started_at = datetime.now(UTC).isoformat()
-    atomic_write_json(
-        receipt_path,
-        {
-            "schema_version": "study_draft_api_receipt.v1",
-            "state": "CALLING",
-            "started_at": started_at,
-            "request_sha256": request_hash,
-            "model_requested": cfg.model,
-            "reasoning": request_payload["reasoning"],
-            "store": cfg.store,
-            "background": cfg.background,
-            "max_output_tokens": cfg.max_output_tokens,
-            "image_detail": cfg.image_detail,
-            "accepted": False,
-            "reason": "CALLING",
-        },
-    )
-
-    try:
-        response = api_client.responses.create(**request_payload)
-    except Exception as exc:
+    receipt: dict[str, Any] | None = None
+    if receipt_path.exists():
+        loaded = json.loads(receipt_path.read_text(encoding="utf-8"))
+        if not isinstance(loaded, dict):
+            raise RuntimeError("API receipt must contain a JSON object")
+        receipt = loaded
+        if receipt.get("state") not in {"IN_PROGRESS", "POLL_TIMEOUT", "POLL_FAILED"}:
+            raise RuntimeError(
+                "API receipt already exists; refusing a second API call for this run"
+            )
+        if receipt.get("request_sha256") != request_hash:
+            raise RuntimeError("Resumable API receipt request hash does not match")
+        response_id = receipt.get("response_id")
+        if not isinstance(response_id, str) or not response_id:
+            raise RuntimeError("Resumable API receipt has no response_id")
+        started_at = str(receipt.get("started_at") or datetime.now(UTC).isoformat())
+        try:
+            response = api_client.responses.retrieve(response_id)
+        except Exception as exc:
+            _write_poll_failure_receipt(
+                receipt_path=receipt_path,
+                started_at=started_at,
+                request_hash=request_hash,
+                config=cfg,
+                response_id=response_id,
+                response_status=str(receipt.get("response_status") or "unknown"),
+                error=exc,
+            )
+            raise
+    else:
+        started_at = datetime.now(UTC).isoformat()
         atomic_write_json(
             receipt_path,
             {
                 "schema_version": "study_draft_api_receipt.v1",
-                "state": "FAILED",
+                "state": "CALLING",
                 "started_at": started_at,
-                "finished_at": datetime.now(UTC).isoformat(),
                 "request_sha256": request_hash,
                 "model_requested": cfg.model,
                 "reasoning": request_payload["reasoning"],
@@ -205,11 +209,32 @@ def run_openai_study_draft_poc(
                 "max_output_tokens": cfg.max_output_tokens,
                 "image_detail": cfg.image_detail,
                 "accepted": False,
-                "reason": "API_CALL_FAILED",
-                "error": repr(exc),
+                "reason": "CALLING",
             },
         )
-        raise
+        try:
+            response = api_client.responses.create(**request_payload)
+        except Exception as exc:
+            atomic_write_json(
+                receipt_path,
+                {
+                    "schema_version": "study_draft_api_receipt.v1",
+                    "state": "FAILED",
+                    "started_at": started_at,
+                    "finished_at": datetime.now(UTC).isoformat(),
+                    "request_sha256": request_hash,
+                    "model_requested": cfg.model,
+                    "reasoning": request_payload["reasoning"],
+                    "store": cfg.store,
+                    "background": cfg.background,
+                    "max_output_tokens": cfg.max_output_tokens,
+                    "image_detail": cfg.image_detail,
+                    "accepted": False,
+                    "reason": "API_CALL_FAILED",
+                    "error": repr(exc),
+                },
+            )
+            raise
 
     response_id = _string_attr(response, "id")
     response_status = _string_attr(response, "status")
@@ -264,26 +289,14 @@ def run_openai_study_draft_poc(
             try:
                 response = api_client.responses.retrieve(response_id)
             except Exception as exc:
-                atomic_write_json(
-                    receipt_path,
-                    {
-                        "schema_version": "study_draft_api_receipt.v1",
-                        "state": "POLL_FAILED",
-                        "started_at": started_at,
-                        "finished_at": datetime.now(UTC).isoformat(),
-                        "request_sha256": request_hash,
-                        "model_requested": cfg.model,
-                        "reasoning": request_payload["reasoning"],
-                        "store": cfg.store,
-                        "background": cfg.background,
-                        "max_output_tokens": cfg.max_output_tokens,
-                        "image_detail": cfg.image_detail,
-                        "response_id": response_id,
-                        "response_status": response_status,
-                        "accepted": False,
-                        "reason": "BACKGROUND_POLL_FAILED",
-                        "error": repr(exc),
-                    },
+                _write_poll_failure_receipt(
+                    receipt_path=receipt_path,
+                    started_at=started_at,
+                    request_hash=request_hash,
+                    config=cfg,
+                    response_id=response_id,
+                    response_status=response_status,
+                    error=exc,
                 )
                 raise
             response_status = _string_attr(response, "status")
@@ -509,6 +522,42 @@ def _default_openai_client() -> Any:
             "OpenAI SDK is not installed; install the optional API dependency"
         ) from exc
     return OpenAI(timeout=60.0, max_retries=0)
+
+
+def _write_poll_failure_receipt(
+    *,
+    receipt_path: Path,
+    started_at: str,
+    request_hash: str,
+    config: OpenAIPocConfig,
+    response_id: str,
+    response_status: str,
+    error: Exception,
+) -> None:
+    atomic_write_json(
+        receipt_path,
+        {
+            "schema_version": "study_draft_api_receipt.v1",
+            "state": "POLL_FAILED",
+            "started_at": started_at,
+            "finished_at": datetime.now(UTC).isoformat(),
+            "request_sha256": request_hash,
+            "model_requested": config.model,
+            "reasoning": {
+                "effort": config.reasoning_effort,
+                "mode": config.reasoning_mode,
+            },
+            "store": config.store,
+            "background": config.background,
+            "max_output_tokens": config.max_output_tokens,
+            "image_detail": config.image_detail,
+            "response_id": response_id,
+            "response_status": response_status,
+            "accepted": False,
+            "reason": "BACKGROUND_POLL_FAILED",
+            "error": repr(error),
+        },
+    )
 
 
 def _request_sha256(payload: dict[str, Any]) -> str:
