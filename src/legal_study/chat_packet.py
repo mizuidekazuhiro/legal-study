@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -197,34 +199,45 @@ def build_chat_packet(
     if target.exists():
         raise FileExistsError(f"Chat packet already exists; refusing overwrite: {target}")
 
-    with zipfile.ZipFile(target, "x", compression=zipfile.ZIP_DEFLATED) as archive:
-        _write_json(archive, "packet_manifest.json", packet_manifest)
-        archive.writestr("handoff.md", handoff_path.read_text(encoding="utf-8"))
-        marker_payload: dict[str, Any] = {"logical_markers": marker_index}
-        if marker_schema_v2:
-            marker_payload.update(
-                {
-                    "schema_version": "marker_index.v2",
-                    "range_semantics": "page_unicode_codepoints_end_exclusive",
-                }
+    descriptor, temp_name = tempfile.mkstemp(
+        dir=target.parent,
+        prefix=f".{target.name}.",
+        suffix=".tmp",
+    )
+    os.close(descriptor)
+    temp_path = Path(temp_name)
+    try:
+        with zipfile.ZipFile(temp_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            _write_json(archive, "packet_manifest.json", packet_manifest)
+            archive.writestr("handoff.md", handoff_path.read_text(encoding="utf-8"))
+            marker_payload: dict[str, Any] = {"logical_markers": marker_index}
+            if marker_schema_v2:
+                marker_payload.update(
+                    {
+                        "schema_version": "marker_index.v2",
+                        "range_semantics": "page_unicode_codepoints_end_exclusive",
+                    }
+                )
+            _write_json(archive, "marker_index.json", marker_payload)
+            if marker_schema_v2:
+                _write_json(
+                    archive,
+                    "page_text.json",
+                    {"schema_version": "page_text.v1", "pages": page_text_index},
+                )
+            if supplemental_payload is not None:
+                _write_json(archive, "supplemental.json", supplemental_payload)
+            archive.writestr(
+                "CHAT_INSTRUCTIONS.md", _chat_instructions(manifest.subject)
             )
-        _write_json(archive, "marker_index.json", marker_payload)
-        if marker_schema_v2:
-            _write_json(
-                archive,
-                "page_text.json",
-                {"schema_version": "page_text.v1", "pages": page_text_index},
-            )
-        if supplemental_payload is not None:
-            _write_json(archive, "supplemental.json", supplemental_payload)
-        archive.writestr(
-            "CHAT_INSTRUCTIONS.md", _chat_instructions(manifest.subject)
-        )
-        for page_number, path in review_files:
-            archive.write(
-                path,
-                arcname=f"review/page-{page_number:04d}-review.png",
-            )
+            for page_number, path in review_files:
+                archive.write(
+                    path,
+                    arcname=f"review/page-{page_number:04d}-review.png",
+                )
+        os.link(temp_path, target)
+    finally:
+        temp_path.unlink(missing_ok=True)
 
     return ChatPacketBuildResult(
         packet_path=str(target),

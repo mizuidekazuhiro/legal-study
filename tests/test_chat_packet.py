@@ -165,6 +165,21 @@ def test_material_validation_does_not_confuse_page_1_with_page_10(
     assert result["checks"]["requested_page_text_present"] is False
 
 
+def test_material_validation_ignores_answer_word_before_problem_heading(
+    tmp_path: Path,
+) -> None:
+    run = _run(tmp_path)
+    handoff = run / "criminal_12_handoff.md"
+    handoff.write_text(
+        "source_file: 刑法答案例.pdf\n" + handoff.read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+
+    result = validate_material_completeness(run)
+
+    assert result["checks"]["material_sections_in_order"] is True
+
+
 def test_build_chat_packet_is_compact_and_project_instruction_free(tmp_path: Path) -> None:
     run = _run(tmp_path)
 
@@ -251,6 +266,29 @@ def test_build_chat_packet_is_compact_and_project_instruction_free(tmp_path: Pat
         assert "reviewed_pages" in instructions
         assert "command_id" in instructions
         assert "never overwrite" in instructions
+
+
+def test_failed_packet_build_leaves_no_final_or_temporary_archive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = _run(tmp_path)
+    _refresh_validation(run)
+    original_write = zipfile.ZipFile.write
+
+    def fail_review_write(
+        self, filename, arcname=None, compress_type=None, compresslevel=None
+    ):
+        if str(arcname or "").startswith("review/"):
+            raise OSError("simulated disk failure")
+        return original_write(self, filename, arcname, compress_type, compresslevel)
+
+    monkeypatch.setattr(zipfile.ZipFile, "write", fail_review_write)
+
+    with pytest.raises(OSError, match="simulated disk failure"):
+        build_chat_packet(run_dir=run)
+
+    assert not (run / "chat_packet.zip").exists()
+    assert not list(run.glob(".chat_packet.zip.*.tmp"))
 
 
 def test_invalid_problem_packet_is_not_exported(tmp_path: Path) -> None:

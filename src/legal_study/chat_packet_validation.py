@@ -45,8 +45,6 @@ def validate_material_completeness(run_dir: Path) -> dict[str, Any]:
     valid_title = any(not any(role in line for role in _AUXILIARY) for line in title_lines)
     booklet_start = bool(re.search(rf"(?<!\d){question}\s*-\s*1(?!\d)", normalized))
     problem_cue = any(cue in normalized for cue in _PROBLEM_CUES)
-    answer_start = any(value in normalized for value in _ANSWER_START)
-    answer_end = any(value in normalized for value in _ANSWER_END)
     title_offset = min(
         (
             normalized.find(line)
@@ -60,10 +58,23 @@ def validate_material_completeness(run_dir: Path) -> dict[str, Any]:
         default=-1,
     )
     answer_offset = min(
-        (normalized.find(value) for value in _ANSWER_START if value in normalized),
+        (
+            offset
+            for value in _ANSWER_START
+            if (offset := normalized.find(value, max(problem_offset + 1, 0))) >= 0
+        ),
         default=-1,
     )
-    answer_end_offset = max(normalized.rfind(value) for value in _ANSWER_END)
+    answer_end_offset = min(
+        (
+            offset
+            for value in _ANSWER_END
+            if (offset := normalized.find(value, max(answer_offset + 1, 0))) >= 0
+        ),
+        default=-1,
+    )
+    answer_start = answer_offset >= 0
+    answer_end = answer_end_offset >= 0
     requested = list(manifest.requested_pages or [])
     handoff_pages = _handoff_page_headings(normalized)
     text_pages = [page for page in requested if page in handoff_pages]
