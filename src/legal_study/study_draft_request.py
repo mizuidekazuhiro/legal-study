@@ -56,6 +56,7 @@ class StudyDraftRequestBundle(StrictBundleModel):
     question: str = Field(min_length=1)
     source: DraftSource
     handoff: BundleTextDocument
+    canonical_source_sha256: str = Field(min_length=64, max_length=64)
     instructions: list[BundleTextDocument] = Field(min_length=1)
     review_sheets: list[BundleReviewImage] = Field(default_factory=list)
     logical_markers: list[BundleLogicalMarker] = Field(default_factory=list)
@@ -234,6 +235,7 @@ def build_study_draft_request_bundle(
         question=question,
         source=source,
         handoff=handoff,
+        canonical_source_sha256=_sha256_file(canonical_path),
         instructions=instructions,
         review_sheets=review_sheets,
         logical_markers=logical_markers,

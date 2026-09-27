@@ -294,6 +294,49 @@ def test_one_question_poc_calls_responses_once_and_accepts_candidate(tmp_path: P
     assert (run_dir / "study_draft_api_raw_response.json").is_file()
 
 
+@pytest.mark.parametrize(
+    ("artifact", "issue_code"),
+    [
+        ("handoff", "BUNDLE_HANDOFF_CHANGED"),
+        ("canonical", "BUNDLE_CANONICAL_CHANGED"),
+        ("review", "BUNDLE_REVIEW_SHEET_CHANGED"),
+    ],
+)
+def test_evidence_changed_after_bundle_is_rejected_before_acceptance(
+    tmp_path: Path,
+    artifact: str,
+    issue_code: str,
+) -> None:
+    run_dir, bundle = _bundle(tmp_path)
+    paths = {
+        "handoff": run_dir / bundle.handoff.path,
+        "canonical": run_dir / bundle.source.canonical_source_path,
+        "review": run_dir / bundle.review_sheets[0].path,
+    }
+    response = _response(
+        output_text=json.dumps(_draft_payload(bundle), ensure_ascii=False)
+    )
+
+    class MutatingResponses(FakeResponses):
+        def create(self, **kwargs):
+            result = super().create(**kwargs)
+            paths[artifact].write_bytes(paths[artifact].read_bytes() + b"changed")
+            return result
+
+    client = SimpleNamespace(responses=MutatingResponses(response))
+
+    result = run_openai_study_draft_poc(
+        bundle=bundle,
+        run_dir=run_dir,
+        client=client,
+    )
+
+    assert result.accepted is False
+    assert result.reason == "BUNDLE_EVIDENCE_CHANGED"
+    assert issue_code in result.acceptance_issue_codes
+    assert not (run_dir / "study_draft.json").exists()
+
+
 def test_client_initialization_failure_does_not_reserve_receipt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

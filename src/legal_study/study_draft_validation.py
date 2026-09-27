@@ -271,7 +271,16 @@ def _read_handoff_frontmatter(
             )
         )
         return None
-    return payload if isinstance(payload, dict) else None
+    if not isinstance(payload, dict):
+        issues.append(
+            StudyDraftValidationIssue(
+                code="INVALID_HANDOFF_FRONTMATTER",
+                message="Handoff YAML frontmatter must contain an object",
+                location=location,
+            )
+        )
+        return None
+    return payload
 
 
 def _validate_source_identity(

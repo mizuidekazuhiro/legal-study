@@ -1,91 +1,45 @@
 ﻿param(
-    [Parameter(Mandatory = $true)]
     [string]$PdfPath,
 
     [string]$Subject = "criminal",
 
     [string]$BridgeRoot,
 
-    [string]$ObsidianInbox
+    [string]$ObsidianInbox,
+
+    [string]$Config = (Join-Path $env:USERPROFILE ".legal-study\service\config.json")
 )
 
 $ErrorActionPreference = "Stop"
 
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$Python = Join-Path $RepoRoot ".venv\Scripts\python.exe"
-if ([string]::IsNullOrWhiteSpace($BridgeRoot)) {
-    $BridgeRoot = if ($env:LEGAL_STUDY_CHAT_BRIDGE_ROOT) {
-        $env:LEGAL_STUDY_CHAT_BRIDGE_ROOT
-    } else {
-        "G:\マイドライブ\LegalStudy_ChatBridge"
-    }
-}
-if ([string]::IsNullOrWhiteSpace($ObsidianInbox)) {
-    $ObsidianInbox = if ($env:LEGAL_STUDY_OBSIDIAN_INBOX) {
-        $env:LEGAL_STUDY_OBSIDIAN_INBOX
-    } else {
-        "G:\マイドライブ\Obsidian_Inbox"
-    }
-}
-
-foreach ($File in @($Python, $PdfPath)) {
+$Launcher = Join-Path $RepoRoot "scripts\Start-LegalStudyWatcher.ps1"
+foreach ($File in @($Launcher, $Config)) {
     if (-not (Test-Path -LiteralPath $File -PathType Leaf)) {
         throw "Required file does not exist: $File"
     }
 }
-foreach ($Folder in @(
-    $BridgeRoot,
-    (Join-Path $BridgeRoot "00_pending"),
-    (Join-Path $BridgeRoot "10_approved"),
-    (Join-Path $BridgeRoot "20_commands"),
-    (Join-Path $BridgeRoot "30_receipts"),
-    (Join-Path $BridgeRoot "99_failed"),
-    $ObsidianInbox
+$settings = Get-Content -LiteralPath $Config -Raw -Encoding UTF8 | ConvertFrom-Json
+foreach ($pair in @(
+    @("PdfPath", $PdfPath, [string]$settings.pdf),
+    @("Subject", $Subject, [string]$settings.subject),
+    @("BridgeRoot", $BridgeRoot, [string]$settings.bridge_root),
+    @("ObsidianInbox", $ObsidianInbox, [string]$settings.obsidian_inbox)
 )) {
-    if (-not (Test-Path -LiteralPath $Folder -PathType Container)) {
-        throw "Required folder does not exist: $Folder"
+    if (-not [string]::IsNullOrWhiteSpace($pair[1]) -and $pair[1] -ne $pair[2]) {
+        throw "$($pair[0]) does not match the supervised service config"
     }
 }
-
-# Start-Process joins ArgumentList elements; quote every value so paths with spaces survive.
-function Join-ProcessArguments([string[]]$Values) {
-    return (($Values | ForEach-Object { '"' + $_.Replace('"', '\"') + '"' }) -join ' ')
-}
-
-$StudyArgs = Join-ProcessArguments @(
-    "-m", "legal_study",
-    "watch-study",
-    $PdfPath,
-    "--subject", $Subject,
-    "--bridge-root", $BridgeRoot
-)
-
-$BridgeArgs = Join-ProcessArguments @(
-    "-m", "legal_study",
-    "watch-chat-bridge",
-    "--bridge-root", $BridgeRoot,
-    "--obsidian-inbox", $ObsidianInbox
-)
-
-$StudyProcess = $null
-try {
-    $StudyProcess = Start-Process -FilePath $Python -ArgumentList $StudyArgs `
-        -WorkingDirectory $RepoRoot -WindowStyle Hidden -PassThru
-    $BridgeProcess = Start-Process -FilePath $Python -ArgumentList $BridgeArgs `
-        -WorkingDirectory $RepoRoot -WindowStyle Hidden -PassThru
-} catch {
-    if ($null -ne $StudyProcess -and -not $StudyProcess.HasExited) {
-        Stop-Process -Id $StudyProcess.Id
-    }
-    throw
-}
+$arguments = '-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + $Launcher + '" -Config "' + $Config + '"'
+$Supervisor = Start-Process -FilePath "powershell.exe" -ArgumentList $arguments `
+    -WorkingDirectory $RepoRoot -WindowStyle Hidden -PassThru
 
 [pscustomobject]@{
-    StudyWatcherPid = $StudyProcess.Id
-    BridgeWatcherPid = $BridgeProcess.Id
-    PdfPath = (Resolve-Path -LiteralPath $PdfPath).Path
-    Subject = $Subject
-    BridgeRoot = (Resolve-Path -LiteralPath $BridgeRoot).Path
-    ObsidianInbox = (Resolve-Path -LiteralPath $ObsidianInbox).Path
+    SupervisorPid = $Supervisor.Id
+    Config = (Resolve-Path -LiteralPath $Config).Path
+    PdfPath = [string]$settings.pdf
+    Subject = [string]$settings.subject
+    BridgeRoot = [string]$settings.bridge_root
+    ObsidianInbox = [string]$settings.obsidian_inbox
     NotionEnabled = $false
 }

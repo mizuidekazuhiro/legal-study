@@ -233,6 +233,24 @@ def test_all_pages_null_identity_normalizes_to_canonical_page_list(
     assert result.issues == []
 
 
+def test_non_object_handoff_frontmatter_is_rejected_with_issue(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_run(run_dir)
+    handoff = run_dir / "criminal_22_handoff.md"
+    handoff.write_text("---\n- not-an-object\n---\n\nbody\n", encoding="utf-8")
+
+    result = accept_study_draft_response(
+        raw_response_text=_raw(_payload()),
+        run_dir=run_dir,
+    )
+
+    assert result.accepted is False
+    assert {issue.code for issue in result.issues} >= {
+        "INVALID_HANDOFF_FRONTMATTER"
+    }
+
+
 def test_invalid_json_is_rejected_without_output(tmp_path: Path) -> None:
     run_dir = tmp_path / "run"
     run_dir.mkdir()

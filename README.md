@@ -84,11 +84,10 @@ Notionは別経路です。内容承認後にユーザーが「登録して」�
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\check_chat_bridge_setup.ps1
-powershell -ExecutionPolicy Bypass -File .\scripts\start_chat_bridge.ps1 `
-  -PdfPath "<刑法PDFの実パス>" -Subject criminal
+powershell -ExecutionPolicy Bypass -File .\scripts\start_chat_bridge.ps1
 ```
 
-`start_chat_bridge.ps1`は`watch-study`と`watch-chat-bridge`の2プロセスを起動し、両PIDを表示します。停止するときは、表示されたPIDだけを`Stop-Process -Id <PID>`でそれぞれ停止してください。BridgeRootとObsidianInboxは`LEGAL_STUDY_CHAT_BRIDGE_ROOT`/`LEGAL_STUDY_OBSIDIAN_INBOX`を優先し、必要なら`-BridgeRoot`/`-ObsidianInbox`で明示できます。Task Schedulerへの自動登録は行いません。
+`start_chat_bridge.ps1`は`~\.legal-study\service\config.json`を読み、Task Schedulerと同じsupervisorを起動してPIDを表示します。supervisorがDriveの準備完了を待ち、`watch-study`と`watch-chat-bridge`を監督します。個別watcherを直接起動する経路は使いません。別configを使う場合だけ`-Config`で明示します。Task Schedulerへの自動登録は行いません。
 
 ## PDFを検査する
 

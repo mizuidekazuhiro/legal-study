@@ -9,7 +9,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from legal_study.io_utils import atomic_write_json, atomic_write_text
+from legal_study.io_utils import atomic_write_json, atomic_write_text, file_sha256
 from legal_study.openai_request import (
     HOST_SOURCE_SNAPSHOT_PATH_SENTINEL,
     build_openai_responses_request_template,
@@ -423,6 +423,29 @@ def run_openai_study_draft_poc(
         )
         return result
 
+    evidence_issue_codes = _bundle_evidence_issue_codes(bundle=bundle, run_dir=root)
+    if evidence_issue_codes:
+        result = OpenAIPocResult(
+            called=True,
+            response_id=response_id,
+            response_status=response_status,
+            response_model=response_model,
+            accepted=False,
+            reason="BUNDLE_EVIDENCE_CHANGED",
+            acceptance_issue_codes=evidence_issue_codes,
+            raw_response_path=raw_response_rel,
+            usage=usage,
+        )
+        _write_final_receipt(
+            receipt_path=receipt_path,
+            started_at=started_at,
+            request_hash=request_hash,
+            config=cfg,
+            result=result,
+            output_text_sha256=hashlib.sha256(output_text.encode("utf-8")).hexdigest(),
+        )
+        return result
+
     acceptance = accept_study_draft_response(
         raw_response_text=host_bound_output_text,
         run_dir=root,
@@ -459,6 +482,36 @@ def run_openai_study_draft_poc(
         output_text_sha256=hashlib.sha256(output_text.encode("utf-8")).hexdigest(),
     )
     return result
+
+
+def _bundle_evidence_issue_codes(
+    *,
+    bundle: StudyDraftRequestBundle,
+    run_dir: Path,
+) -> list[str]:
+    """Reverify immutable request evidence immediately before acceptance."""
+
+    checks = [
+        ("BUNDLE_HANDOFF_CHANGED", run_dir / bundle.handoff.path, bundle.handoff.sha256),
+        (
+            "BUNDLE_CANONICAL_CHANGED",
+            run_dir / bundle.source.canonical_source_path,
+            bundle.canonical_source_sha256,
+        ),
+        *[
+            ("BUNDLE_REVIEW_SHEET_CHANGED", run_dir / sheet.path, sheet.sha256)
+            for sheet in bundle.review_sheets
+        ],
+    ]
+    issues: list[str] = []
+    for code, path, expected_hash in checks:
+        try:
+            actual_hash = file_sha256(path.resolve())
+        except OSError:
+            actual_hash = None
+        if actual_hash != expected_hash and code not in issues:
+            issues.append(code)
+    return issues
 
 
 

@@ -36,17 +36,15 @@ def test_doctor_does_not_create_workspace(tmp_path: Path) -> None:
 def test_normal_startup_never_enables_pc_notion_or_requires_api_keys() -> None:
     assert STARTER.read_bytes().startswith(b"\xef\xbb\xbf")
     script = STARTER.read_text(encoding="utf-8")
-    assert "watch-study" in script
-    assert "watch-chat-bridge" in script
-    assert "--bridge-root" in script
-    assert "--obsidian-inbox" in script
+    assert "Start-LegalStudyWatcher.ps1" in script
+    assert "watch-study" not in script
+    assert "watch-chat-bridge" not in script
     assert "--enable-notion" not in script
     assert "EnableNotion" not in script
     assert "NOTION_TOKEN" not in script
     assert "OPENAI_API_KEY" not in script
     assert "-WindowStyle Hidden" in script
-    assert "LEGAL_STUDY_CHAT_BRIDGE_ROOT" in script
-    assert "LEGAL_STUDY_OBSIDIAN_INBOX" in script
+    assert ".legal-study\\service\\config.json" in script
 
 
 def test_checker_is_windows_powershell_unicode_safe() -> None:
