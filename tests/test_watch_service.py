@@ -9,7 +9,11 @@ import pytest
 
 from legal_study.automation import watch_service
 from legal_study.automation.watch_lock import WatchLock
-from legal_study.automation.watch_service import bridge_paths_available, signature
+from legal_study.automation.watch_service import (
+    bridge_paths_available,
+    record_child_exit,
+    signature,
+)
 from legal_study.chat_bridge_worker import watch_bridge_commands
 from legal_study.settings import LocalSettings
 
@@ -91,6 +95,21 @@ def test_bridge_availability_requires_worker_subfolders(tmp_path):
     (bridge / "00_pending").mkdir()
 
     assert bridge_paths_available(bridge, inbox)
+
+
+def test_clean_child_exit_does_not_set_last_error() -> None:
+    state: dict[str, object] = {"last_error": None}
+
+    record_child_exit(state, name="bridge", code=0, now=100.0)
+
+    assert state["last_error"] is None
+
+    record_child_exit(state, name="bridge", code=1, now=101.0)
+    assert state["last_error"] == {
+        "at": 101.0,
+        "worker": "bridge",
+        "message": "exit 1; restart scheduled",
+    }
 
 
 def test_stale_heartbeat_is_not_alive() -> None:

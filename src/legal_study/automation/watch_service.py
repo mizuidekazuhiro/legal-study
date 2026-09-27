@@ -30,6 +30,19 @@ def bridge_paths_available(bridge_root: Path, obsidian_inbox: Path) -> bool:
     )
 
 
+def record_child_exit(
+    state: dict[str, object], *, name: str, code: int, now: float
+) -> None:
+    """Record abnormal exits without turning intentional code-0 exits into errors."""
+
+    if code != 0:
+        state["last_error"] = {
+            "at": now,
+            "worker": name,
+            "message": f"exit {code}; restart scheduled",
+        }
+
+
 class ChildJob:
     """Kill only owned children if Task Scheduler terminates this supervisor."""
 
@@ -251,12 +264,9 @@ def main():
                 if code is not None:
                     children.pop(name, None)
                     restart_after[name] = time.monotonic() + child_restart_seconds
-                    state["last_error"] = {
-                        "at": time.time(),
-                        "worker": name,
-                        "message": f"exit {code}; restart scheduled",
-                    }
-                    log.warning(
+                    record_child_exit(state, name=name, code=code, now=time.time())
+                    log_method = log.info if code == 0 else log.warning
+                    log_method(
                         "%s exited code=%s; restart in %.1f seconds",
                         name,
                         code,
