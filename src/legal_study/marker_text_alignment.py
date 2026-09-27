@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 from typing import Any
 
+from legal_study.page_geometry import pdf_bbox_to_rendered_bbox
 from legal_study.pdf.quality import suspicious_char_count, suspicious_token_count
 
 _CONTROL_CHARS = {chr(value) for value in range(32)} - {"\n", "\r", "\t"}
@@ -165,6 +166,13 @@ def _align_marker(
         selected = _unique_range(canonical_text, usable_exact)
 
     marker_bbox = _paint_bbox(aligned)
+    if marker_bbox is not None:
+        marker_bbox = pdf_bbox_to_rendered_bbox(
+            marker_bbox,
+            rendered_page_width=float(page.get("page_width") or 1.0),
+            rendered_page_height=float(page.get("page_height") or 1.0),
+            page_rotation=int(page.get("page_rotation") or 0),
+        )
     intersecting = (
         [line for line in line_ranges if _intersects(marker_bbox, line["bbox"])]
         if marker_bbox is not None

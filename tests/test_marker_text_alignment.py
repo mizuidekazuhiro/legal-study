@@ -187,6 +187,40 @@ def test_zero_height_stroke_uses_its_painted_width_for_line_overlap() -> None:
     assert aligned[0]["position_status"] == "VERIFIED"
 
 
+@pytest.mark.parametrize(
+    ("rotation", "ocr_bbox"),
+    [
+        (0, [10, 20, 30, 40]),
+        (90, [160, 10, 180, 30]),
+        (180, [70, 160, 90, 180]),
+        (270, [20, 70, 40, 90]),
+    ],
+)
+def test_rotated_marker_geometry_matches_rendered_ocr_line(
+    rotation: int, ocr_bbox: list[float]
+) -> None:
+    rendered_width, rendered_height = (
+        (200, 100) if rotation in {90, 270} else (100, 200)
+    )
+    pages = [
+        {
+            "page_number": 1,
+            "page_width": rendered_width,
+            "page_height": rendered_height,
+            "page_rotation": rotation,
+            "text_layer_trust": "low",
+            "reconciled_text": "\x01" * 2,
+        }
+    ]
+    marker = _marker(text=None, bbox=[10, 20, 30, 40])
+    ocr = _full_page_ocr("対象", [("対象", ocr_bbox)])
+
+    aligned = align_markers_to_canonical_pages(pages, [marker], ocr)
+
+    assert aligned[0]["exact_text"] == "対象"
+    assert aligned[0]["position_status"] == "VERIFIED"
+
+
 
 @pytest.mark.parametrize(
     "suspicious_text",
