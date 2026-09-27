@@ -330,3 +330,76 @@ def test_v2_packet_rejects_marker_schema_downgrade(
 
     with pytest.raises(RuntimeError, match="structural validation failed"):
         validate_chat_packet_structure(tampered)
+
+
+
+def test_v2_packet_preserves_intentionally_empty_canonical_text(tmp_path: Path) -> None:
+    run = _run(tmp_path)
+    canonical_path = run / "canonical_source.json"
+    canonical = json.loads(canonical_path.read_text(encoding="utf-8"))
+    empty_digest = hashlib.sha256(b"").hexdigest()
+    canonical["schema_version"] = 4
+    canonical["pages"] = [
+        {
+            "page_number": 109,
+            "canonical_text": "",
+            "canonical_text_sha256": empty_digest,
+            "canonical_text_source": "unavailable_requires_visual_review",
+            "reconciled_text": "UNTRUSTED EMBEDDED TEXT",
+        }
+    ]
+    canonical["logical_markers"] = []
+    canonical_path.write_text(json.dumps(canonical, ensure_ascii=False), encoding="utf-8")
+
+    result = build_chat_packet(run_dir=run)
+
+    assert validate_chat_packet_structure(Path(result.packet_path))["valid"] is True
+    with zipfile.ZipFile(result.packet_path) as archive:
+        page = json.loads(archive.read("page_text.json"))["pages"][0]
+        assert page["text"] == ""
+        assert page["text_sha256"] == empty_digest
+        assert page["source"] == "unavailable_requires_visual_review"
+
+
+@pytest.mark.parametrize("tamper_kind", ["missing_page", "changed_text", "changed_hash"])
+def test_v2_packet_validates_every_requested_page_text_without_markers(
+    tmp_path: Path, tamper_kind: str
+) -> None:
+    run = _run(tmp_path)
+    canonical_path = run / "canonical_source.json"
+    canonical = json.loads(canonical_path.read_text(encoding="utf-8"))
+    text = "marker-free canonical text"
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    canonical["schema_version"] = 4
+    canonical["pages"] = [
+        {
+            "page_number": 109,
+            "canonical_text": text,
+            "canonical_text_sha256": digest,
+            "canonical_text_source": "reconciled_text",
+        }
+    ]
+    canonical["logical_markers"] = []
+    canonical_path.write_text(json.dumps(canonical, ensure_ascii=False), encoding="utf-8")
+    result = build_chat_packet(run_dir=run)
+    packet = Path(result.packet_path)
+    tampered = tmp_path / f"page-text-{tamper_kind}.zip"
+
+    with zipfile.ZipFile(packet) as source, zipfile.ZipFile(
+        tampered, "w", compression=zipfile.ZIP_DEFLATED
+    ) as target:
+        for name in source.namelist():
+            payload = source.read(name)
+            if name == "page_text.json":
+                page_text = json.loads(payload)
+                if tamper_kind == "missing_page":
+                    page_text["pages"] = []
+                elif tamper_kind == "changed_text":
+                    page_text["pages"][0]["text"] = "tampered"
+                else:
+                    page_text["pages"][0]["text_sha256"] = "0" * 64
+                payload = json.dumps(page_text, ensure_ascii=False).encode("utf-8")
+            target.writestr(name, payload)
+
+    with pytest.raises(RuntimeError, match="structural validation failed"):
+        validate_chat_packet_structure(tampered)

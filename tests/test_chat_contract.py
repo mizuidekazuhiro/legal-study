@@ -148,3 +148,23 @@ def test_builder_requires_timezone_aware_iso8601_approval_time() -> None:
             approved_at="2026-09-23T00:00:00",
             approval_text="承認",
         )
+
+
+
+def test_builder_accepts_chat_packet_v2() -> None:
+    manifest = _packet_manifest()
+    manifest["schema_version"] = "chat_packet.v2"
+
+    command = build_bridge_command(
+        packet_manifest=manifest,
+        result_sha256="c" * 64,
+        action=BridgeAction.APPLY_OBSIDIAN,
+        approved_at="2026-09-23T00:00:00Z",
+        approval_text="承認",
+        notion_registration_authorized=False,
+    )
+
+    assert command.subject == manifest["subject"]
+    assert command.question == manifest["question"]
+    assert command.source_sha256 == manifest["source_sha256"]
+    assert command.run_id == manifest["run_id"]

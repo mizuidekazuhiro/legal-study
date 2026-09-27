@@ -133,10 +133,37 @@ def validate_chat_packet_structure(packet: Path) -> dict[str, Any]:
                 not marker_schema_v2
                 or page_text_payload.get("schema_version") == "page_text.v1"
             )
+            raw_page_text_entries = page_text_payload.get("pages", [])
+            page_text_entries_valid = isinstance(raw_page_text_entries, list) and all(
+                isinstance(page, dict) and page.get("page_number") is not None
+                for page in raw_page_text_entries
+            )
+            page_text_entries = raw_page_text_entries if page_text_entries_valid else []
+            page_text_numbers = [int(page["page_number"]) for page in page_text_entries]
+            page_text_pages_match_manifest = (
+                not marker_schema_v2
+                or (
+                    len(page_text_numbers) == len(requested)
+                    and len(page_text_numbers) == len(set(page_text_numbers))
+                    and set(page_text_numbers) == set(requested)
+                )
+            )
+            page_text_hashes_valid = (
+                not marker_schema_v2
+                or (
+                    page_text_pages_match_manifest
+                    and all(
+                        isinstance(page.get("text"), str)
+                        and isinstance(page.get("text_sha256"), str)
+                        and page["text_sha256"]
+                        == hashlib.sha256(page["text"].encode("utf-8")).hexdigest()
+                        for page in page_text_entries
+                    )
+                )
+            )
             page_texts = {
                 int(page["page_number"]): page
-                for page in page_text_payload.get("pages", [])
-                if isinstance(page, dict) and page.get("page_number") is not None
+                for page in page_text_entries
             }
             marker_refs_valid = (
                 not marker_schema_v2
@@ -181,6 +208,9 @@ def validate_chat_packet_structure(packet: Path) -> dict[str, Any]:
                 "marker_schema_matches_manifest": marker_schema_consistent,
                 "page_text_present_for_v2": not marker_schema_v2 or page_text_present,
                 "page_text_schema_valid_for_v2": page_text_schema_valid,
+                "page_text_entries_valid_for_v2": not marker_schema_v2 or page_text_entries_valid,
+                "page_text_pages_match_manifest": page_text_pages_match_manifest,
+                "page_text_hashes_valid": page_text_hashes_valid,
                 "review_pages_match_manifest": expected_reviews
                 == {name for name in names if name.startswith("review/")},
                 "handoff_pages_match_manifest": all(

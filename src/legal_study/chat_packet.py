@@ -76,7 +76,11 @@ def build_chat_packet(
     page_text_index = [
         {
             "page_number": int(page["page_number"]),
-            "text": str(page.get("canonical_text") or page.get("reconciled_text") or ""),
+            "text": (
+                str(page.get("canonical_text") or "")
+                if "canonical_text" in page
+                else str(page.get("reconciled_text") or "")
+            ),
             "text_sha256": page.get("canonical_text_sha256"),
             "source": page.get("canonical_text_source", "legacy_reconciled_text"),
         }
